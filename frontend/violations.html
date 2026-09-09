@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Violations · SafeCityAI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">🛡️</span> SafeCityAI</a>
+      <nav class="side-nav">
+        <a href="/app">⚡ Detect</a>
+        <a href="/live">📹 Live webcam</a>
+        <a href="/dashboard">📊 Dashboard</a>
+        <a href="/violations" class="active">🎫 Violations</a>
+        <a href="/about">ℹ️ About</a>
+        <a href="/api/docs" target="_blank">🛠 API docs</a>
+      </nav>
+      <div class="side-footer">E-challan queue</div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <button class="nav-toggle" data-nav-toggle>☰</button>
+          <h1>Violation Tickets</h1>
+        </div>
+        <div style="display:flex;gap:.6rem;align-items:center">
+          <button class="btn btn-sm btn-secondary" id="exportBtn">Export CSV</button>
+          <div id="userChip"></div>
+        </div>
+      </header>
+      <div class="page">
+        <div class="card" style="margin-bottom:1.25rem">
+          <div class="form-row" style="margin:0">
+            <div class="field">
+              <label>Status</label>
+              <select id="fStatus">
+                <option value="">All</option>
+                <option>open</option>
+                <option>reviewed</option>
+                <option>issued</option>
+                <option>dismissed</option>
+                <option>paid</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Type</label>
+              <select id="fType">
+                <option value="">All</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Severity</label>
+              <select id="fSev">
+                <option value="">All</option>
+                <option>low</option>
+                <option>medium</option>
+                <option>high</option>
+                <option>critical</option>
+              </select>
+            </div>
+            <button class="btn btn-primary" id="filterBtn">Apply filters</button>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card" style="grid-column: span 1">
+            <div class="card-title">Ticket list</div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Ticket</th><th>Type</th><th>Sev</th><th>Cam</th><th>Fine</th><th>Status</th><th>When</th>
+                  </tr>
+                </thead>
+                <tbody id="violBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card" id="detailCard">
+            <div class="card-title">Ticket detail</div>
+            <div id="detailEmpty" class="empty-state">Select a ticket to review</div>
+            <div id="detailBox" class="hidden">
+              <h2 id="dTicket" style="font-size:1.15rem;margin-bottom:.5rem;letter-spacing:-0.02em"></h2>
+              <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem">
+                <span id="dType"></span>
+                <span id="dSev"></span>
+                <span id="dStatus"></span>
+              </div>
+              <div style="font-size:.9rem;color:var(--text-muted);display:grid;gap:.4rem;margin-bottom:1rem">
+                <div><strong style="color:var(--text)">Vehicle:</strong> <span id="dVeh"></span></div>
+                <div><strong style="color:var(--text)">Plate:</strong> <span id="dPlate"></span></div>
+                <div><strong style="color:var(--text)">Camera:</strong> <span id="dCam"></span></div>
+                <div><strong style="color:var(--text)">Location:</strong> <span id="dLoc"></span></div>
+                <div><strong style="color:var(--text)">Confidence:</strong> <span id="dConf"></span></div>
+                <div><strong style="color:var(--text)">Fine:</strong> <span id="dFine"></span></div>
+                <div><strong style="color:var(--text)">Notes:</strong> <span id="dNotes"></span></div>
+              </div>
+              <div class="form-row">
+                <div class="field">
+                  <label>Update status</label>
+                  <select id="uStatus">
+                    <option>open</option>
+                    <option>reviewed</option>
+                    <option>issued</option>
+                    <option>dismissed</option>
+                    <option>paid</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Plate text</label>
+                  <input id="uPlate" placeholder="e.g. WB 02 AB 1234" />
+                </div>
+              </div>
+              <div class="field" style="margin-bottom:1rem">
+                <label>Notes</label>
+                <textarea id="uNotes" rows="2" placeholder="Officer notes…"></textarea>
+              </div>
+              <div style="display:flex;gap:.6rem;flex-wrap:wrap">
+                <button class="btn btn-primary" id="saveBtn">Save changes</button>
+                <a class="btn btn-secondary" id="pdfBtn" href="#" target="_blank">Download PDF</a>
+              </div>
+              <p style="font-size:.75rem;color:var(--text-dim);margin-top:.85rem">Sign in as officer/admin to update tickets.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+  <script>
+    let selected = null;
+    let rows = [];
+
+    SafeCity.mountUserChip(document.getElementById("userChip"));
+    SafeCity.refreshMe().then(() => SafeCity.mountUserChip(document.getElementById("userChip")));
+
+    async function initTypes() {
+      try {
+        const meta = await SafeCity.api("/meta/violation-types");
+        const sel = document.getElementById("fType");
+        sel.innerHTML = `<option value="">All</option>` + meta.types.map((t) =>
+          `<option value="${t.id}">${t.label}</option>`).join("");
+      } catch {}
+    }
+
+    async function load() {
+      const params = new URLSearchParams();
+      const st = document.getElementById("fStatus").value;
+      const tp = document.getElementById("fType").value;
+      const sv = document.getElementById("fSev").value;
+      if (st) params.set("status", st);
+      if (tp) params.set("violation_type", tp);
+      if (sv) params.set("severity", sv);
+      params.set("limit", "100");
+      rows = await SafeCity.api(`/violations?${params}`);
+      const body = document.getElementById("violBody");
+      if (!rows.length) {
+        body.innerHTML = `<tr><td colspan="7" style="color:var(--text-dim)">No tickets match</td></tr>`;
+        return;
+      }
+      body.innerHTML = rows.map((v) => `
+        <tr data-id="${v.ticket_id}" style="cursor:pointer">
+          <td><code style="color:var(--accent)">${v.ticket_id}</code></td>
+          <td>${SafeCity.violationLabel(v.violation_type)}</td>
+          <td>${SafeCity.badgeSev(v.severity)}</td>
+          <td>${v.camera_id}</td>
+          <td>${SafeCity.money(v.fine_amount)}</td>
+          <td>${SafeCity.badgeStatus(v.status)}</td>
+          <td>${SafeCity.fmtDate(v.created_at)}</td>
+        </tr>`).join("");
+      body.querySelectorAll("tr[data-id]").forEach((tr) => {
+        tr.addEventListener("click", () => select(tr.dataset.id));
+      });
+    }
+
+    function select(id) {
+      selected = rows.find((r) => r.ticket_id === id);
+      if (!selected) return;
+      document.getElementById("detailEmpty").classList.add("hidden");
+      document.getElementById("detailBox").classList.remove("hidden");
+      document.getElementById("dTicket").textContent = selected.ticket_id;
+      document.getElementById("dType").innerHTML = `<span class="badge badge-open">${SafeCity.violationLabel(selected.violation_type)}</span>`;
+      document.getElementById("dSev").innerHTML = SafeCity.badgeSev(selected.severity);
+      document.getElementById("dStatus").innerHTML = SafeCity.badgeStatus(selected.status);
+      document.getElementById("dVeh").textContent = selected.vehicle_class;
+      document.getElementById("dPlate").textContent = selected.plate_text || "Not captured";
+      document.getElementById("dCam").textContent = selected.camera_id;
+      document.getElementById("dLoc").textContent = selected.location;
+      document.getElementById("dConf").textContent = `${(selected.confidence * 100).toFixed(1)}%`;
+      document.getElementById("dFine").textContent = SafeCity.money(selected.fine_amount);
+      document.getElementById("dNotes").textContent = selected.notes || "—";
+      document.getElementById("uStatus").value = selected.status;
+      document.getElementById("uPlate").value = selected.plate_text || "";
+      document.getElementById("uNotes").value = selected.notes || "";
+      document.getElementById("pdfBtn").href = `/api/violations/${selected.ticket_id}/pdf`;
+    }
+
+    document.getElementById("saveBtn").addEventListener("click", async () => {
+      if (!selected) return;
+      if (!SafeCity.token()) {
+        SafeCity.toast("Sign in required to update tickets", "err");
+        return;
+      }
+      try {
+        const updated = await SafeCity.api(`/violations/${selected.ticket_id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            status: document.getElementById("uStatus").value,
+            plate_text: document.getElementById("uPlate").value || null,
+            notes: document.getElementById("uNotes").value || null,
+          }),
+        });
+        SafeCity.toast("Ticket updated");
+        await load();
+        select(updated.ticket_id);
+      } catch (e) {
+        SafeCity.toast(e.message, "err");
+      }
+    });
+
+    document.getElementById("exportBtn").addEventListener("click", async () => {
+      if (!SafeCity.token()) {
+        SafeCity.toast("Sign in to export CSV", "err");
+        window.location.href = "/login";
+        return;
+      }
+      try {
+        const res = await fetch("/api/export/violations.csv", { headers: SafeCity.headers(false) });
+        if (!res.ok) throw new Error("Export failed");
+        const blob = await res.blob();
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "safecity_violations.csv";
+        a.click();
+        SafeCity.toast("CSV downloaded");
+      } catch (e) {
+        SafeCity.toast(e.message, "err");
+      }
+    });
+
+    document.getElementById("filterBtn").addEventListener("click", () => load().catch((e) => SafeCity.toast(e.message, "err")));
+    initTypes();
+    load().catch((e) => SafeCity.toast(e.message, "err"));
+  </script>
+</body>
+</html>

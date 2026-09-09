@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in · SafeCityAI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="auth-wrap">
+    <div class="auth-card">
+      <a class="brand" href="/" style="margin-bottom:1.25rem">
+        <span class="brand-mark">🛡️</span> SafeCityAI
+      </a>
+      <h1 id="title">Officer sign in</h1>
+      <p class="sub" id="sub">Access the control room, tickets, and exports.</p>
+
+      <form id="form">
+        <div class="field" id="nameField" style="display:none">
+          <label>Full name</label>
+          <input id="full_name" placeholder="Your name" />
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input id="email" type="email" required placeholder="admin@safecity.ai" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input id="password" type="password" required placeholder="••••••••" autocomplete="current-password" minlength="6" />
+        </div>
+        <button class="btn btn-primary" type="submit" id="submitBtn">Sign in</button>
+      </form>
+
+      <div class="auth-alt">
+        <span id="toggleText">No account?</span>
+        <a href="#" id="toggleMode">Create one</a>
+      </div>
+
+      <div class="demo-creds">
+        Demo accounts<br/>
+        admin@safecity.ai / admin123<br/>
+        officer@safecity.ai / officer123<br/>
+        analyst@safecity.ai / analyst123
+      </div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+  <script>
+    let mode = "login";
+    const form = document.getElementById("form");
+    document.getElementById("toggleMode").addEventListener("click", (e) => {
+      e.preventDefault();
+      mode = mode === "login" ? "register" : "login";
+      document.getElementById("title").textContent = mode === "login" ? "Officer sign in" : "Create account";
+      document.getElementById("sub").textContent = mode === "login"
+        ? "Access the control room, tickets, and exports."
+        : "Register as a traffic officer or analyst.";
+      document.getElementById("submitBtn").textContent = mode === "login" ? "Sign in" : "Register";
+      document.getElementById("toggleText").textContent = mode === "login" ? "No account?" : "Have an account?";
+      document.getElementById("toggleMode").textContent = mode === "login" ? "Create one" : "Sign in";
+      document.getElementById("nameField").style.display = mode === "register" ? "flex" : "none";
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const email = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+      const btn = document.getElementById("submitBtn");
+      btn.disabled = true;
+      try {
+        if (mode === "register") {
+          await SafeCity.api("/auth/register", {
+            method: "POST",
+            body: JSON.stringify({
+              email,
+              password,
+              full_name: document.getElementById("full_name").value || email.split("@")[0],
+              role: "officer",
+            }),
+          });
+          SafeCity.toast("Account created — signing in…");
+        }
+        const tok = await SafeCity.api("/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ email, password }),
+        });
+        SafeCity.setAuth(tok.access_token, { email });
+        const me = await SafeCity.api("/auth/me");
+        SafeCity.setAuth(tok.access_token, me);
+        SafeCity.toast("Welcome, " + (me.full_name || me.email));
+        location.href = "/dashboard";
+      } catch (err) {
+        SafeCity.toast(err.message || String(err), "err");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

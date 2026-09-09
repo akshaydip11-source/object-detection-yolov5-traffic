@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dashboard · SafeCityAI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">🛡️</span> SafeCityAI</a>
+      <nav class="side-nav">
+        <a href="/app">⚡ Detect</a>
+        <a href="/live">📹 Live webcam</a>
+        <a href="/dashboard" class="active">📊 Dashboard</a>
+        <a href="/violations">🎫 Violations</a>
+        <a href="/about">ℹ️ About</a>
+        <a href="/api/docs" target="_blank">🛠 API docs</a>
+      </nav>
+      <div class="side-footer">Control room · real-time stats</div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <button class="nav-toggle" data-nav-toggle>☰</button>
+          <h1>Operations Dashboard</h1>
+        </div>
+        <div style="display:flex;gap:.6rem;align-items:center">
+          <button class="btn btn-sm btn-secondary" id="refreshBtn">Refresh</button>
+          <div id="userChip"></div>
+        </div>
+      </header>
+      <div class="page">
+        <div class="grid-stats" id="statsRow" style="margin-bottom:1.25rem"></div>
+
+        <div class="grid-2" style="margin-bottom:1.25rem">
+          <div class="card">
+            <div class="card-title">Violations by type</div>
+            <div id="typeBars" class="bar-chart"></div>
+          </div>
+          <div class="card">
+            <div class="card-title">7-day trend</div>
+            <div id="trend" class="trend-chart" style="margin-bottom:1.5rem"></div>
+            <div class="card-title" style="margin-top:1rem">Severity mix</div>
+            <div id="sevBars" class="bar-chart"></div>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">Recent activity</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>Ticket</th><th>Type</th><th>Sev</th><th>Cam</th><th>Fine</th><th>Status</th></tr></thead>
+                <tbody id="recentBody"></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Camera network</div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>ID</th><th>Name</th><th>Location</th><th>Status</th><th>Flags</th></tr></thead>
+                <tbody id="camBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+  <script>
+    SafeCity.mountUserChip(document.getElementById("userChip"));
+    SafeCity.refreshMe().then(() => SafeCity.mountUserChip(document.getElementById("userChip")));
+
+    async function load() {
+      const [stats, cams] = await Promise.all([
+        SafeCity.api("/dashboard/stats"),
+        SafeCity.api("/cameras"),
+      ]);
+
+      document.getElementById("statsRow").innerHTML = [
+        ["Detections", stats.total_detections, "all-time jobs"],
+        ["Violations", stats.total_violations, `${stats.open_violations} open`],
+        ["Tickets issued", stats.issued_tickets, "issued + paid"],
+        ["Cameras", `${stats.cameras_online}/${stats.cameras_total}`, "online"],
+        ["Avg latency", SafeCity.fmtMs(stats.avg_processing_ms), "per job"],
+      ].map(([label, value, hint]) => `
+        <div class="stat-card">
+          <div class="label">${label}</div>
+          <div class="value">${value}</div>
+          <div class="hint">${hint}</div>
+        </div>`).join("");
+
+      const types = stats.violations_by_type || {};
+      const maxT = Math.max(1, ...Object.values(types), 1);
+      document.getElementById("typeBars").innerHTML = Object.keys(types).length
+        ? Object.entries(types).sort((a,b)=>b[1]-a[1]).map(([k,v]) => `
+          <div class="bar-row">
+            <span>${SafeCity.violationLabel(k)}</span>
+            <div class="bar-track"><div class="bar-fill" style="width:${(v/maxT)*100}%"></div></div>
+            <span class="count">${v}</span>
+          </div>`).join("")
+        : `<div class="empty-state" style="padding:1rem">No violations yet — run a detection</div>`;
+
+      const sevs = stats.violations_by_severity || {};
+      const maxS = Math.max(1, ...Object.values(sevs), 1);
+      document.getElementById("sevBars").innerHTML = Object.entries(sevs).map(([k,v]) => `
+        <div class="bar-row">
+          <span>${k}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${(v/maxS)*100}%;background:${
+            k==='critical'||k==='high' ? 'linear-gradient(90deg,#ef4444,#f59e0b)' : 'var(--gradient)'
+          }"></div></div>
+          <span class="count">${v}</span>
+        </div>`).join("") || "—";
+
+      const trend = stats.daily_trend || [];
+      const maxV = Math.max(1, ...trend.map((d) => d.violations));
+      document.getElementById("trend").innerHTML = trend.map((d) => {
+        const h = Math.max(4, (d.violations / maxV) * 120);
+        const label = d.date.slice(5);
+        return `<div class="trend-bar" style="height:${h}px" title="${d.date}: ${d.violations} viol / ${d.detections} det"><span>${label}</span></div>`;
+      }).join("");
+
+      document.getElementById("recentBody").innerHTML = (stats.recent_activity || []).map((r) => `
+        <tr>
+          <td><a href="/violations">${r.ticket_id}</a></td>
+          <td>${SafeCity.violationLabel(r.type)}</td>
+          <td>${SafeCity.badgeSev(r.severity)}</td>
+          <td>${r.camera_id}</td>
+          <td>${SafeCity.money(r.fine)}</td>
+          <td>${SafeCity.badgeStatus(r.status)}</td>
+        </tr>`).join("") || `<tr><td colspan="6" style="color:var(--text-dim)">No activity</td></tr>`;
+
+      document.getElementById("camBody").innerHTML = cams.map((c) => `
+        <tr>
+          <td><code style="color:var(--accent)">${c.camera_id}</code></td>
+          <td>${c.name}</td>
+          <td>${c.location}</td>
+          <td><span class="badge badge-${c.status}">${c.status}</span></td>
+          <td>${c.violation_count}</td>
+        </tr>`).join("");
+    }
+
+    document.getElementById("refreshBtn").addEventListener("click", () => {
+      load().then(() => SafeCity.toast("Dashboard refreshed")).catch((e) => SafeCity.toast(e.message, "err"));
+    });
+    load().catch((e) => SafeCity.toast(e.message, "err"));
+    setInterval(() => load().catch(() => {}), 30000);
+  </script>
+</body>
+</html>

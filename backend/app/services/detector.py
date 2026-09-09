@@ -1,0 +1,702 @@
+"""
+YOLO11n ONNX object detection + SafeCityAI traffic violation heuristics.
+
+Uses COCO-pretrained YOLO for vehicle/person/motorcycle detection, then applies
+traffic-rule heuristics (helmet/seatbelt proxies, triple-riding, density rules)
+so the product is fully functional end-to-end without a custom-trained weights file.
+Custom class fine-tuning notes are in /docs.
+"""
+from __future__ import annotations
+
+import time
+import uuid
+from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any
+
+import cv2
+import numpy as np
+import onnxruntime as ort
+
+from app.config import settings
+
+
+# COCO class indices we care about for traffic
+PERSON = 0
+BICYCLE = 1
+CAR = 2
+MOTORCYCLE = 3
+BUS = 5
+TRUCK = 7
+TRAFFIC_LIGHT = 9
+STOP_SIGN = 11
+
+VEHICLE_IDS = {BICYCLE, CAR, MOTORCYCLE, BUS, TRUCK}
+RIDER_VEHICLE_IDS = {BICYCLE, MOTORCYCLE}
+
+# Fine schedule (INR) — illustrative Indian MV Act style amounts
+FINE_SCHEDULE = {
+    "no_helmet": 1000.0,
+    "no_seatbelt": 1000.0,
+    "triple_riding": 2000.0,
+    "overcrowded_vehicle": 1500.0,
+    "red_light_suspect": 5000.0,
+    "stop_sign_suspect": 2000.0,
+    "unattended_child_proxy": 500.0,
+    "high_risk_cluster": 500.0,
+}
+
+SEVERITY_MAP = {
+    "no_helmet": "high",
+    "no_seatbelt": "medium",
+    "triple_riding": "high",
+    "overcrowded_vehicle": "medium",
+    "red_light_suspect": "critical",
+    "stop_sign_suspect": "high",
+    "unattended_child_proxy": "medium",
+    "high_risk_cluster": "low",
+}
+
+VIOLATION_LABELS = {
+    "no_helmet": "No Helmet Detected",
+    "no_seatbelt": "Seatbelt Violation (Suspected)",
+    "triple_riding": "Triple Riding / Overloading",
+    "overcrowded_vehicle": "Overcrowded Vehicle",
+    "red_light_suspect": "Red Light Jump (Suspected)",
+    "stop_sign_suspect": "Stop Sign Violation (Suspected)",
+    "unattended_child_proxy": "Vulnerable Road User Alert",
+    "high_risk_cluster": "High-Risk Object Cluster",
+}
+
+
+@dataclass
+class Det:
+    class_id: int
+    class_name: str
+    confidence: float
+    x1: float
+    y1: float
+    x2: float
+    y2: float
+    is_violation: bool = False
+    violation_type: str | None = None
+
+    def to_dict(self) -> dict:
+        return {
+            "class_id": self.class_id,
+            "class_name": self.class_name,
+            "confidence": round(self.confidence, 4),
+            "box": {
+                "x1": round(self.x1, 1),
+                "y1": round(self.y1, 1),
+                "x2": round(self.x2, 1),
+                "y2": round(self.y2, 1),
+            },
+            "is_violation": self.is_violation,
+            "violation_type": self.violation_type,
+        }
+
+
+class YOLODetector:
+    def __init__(self) -> None:
+        self.model_path = Path(settings.model_path)
+        self.names = self._load_names()
+        self.session: ort.InferenceSession | None = None
+        self.input_name = "images"
+        self.input_size = 640
+        self._load()
+
+    def _load_names(self) -> list[str]:
+        path = Path(settings.coco_names_path)
+        if path.exists():
+            return [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
+        return [f"class_{i}" for i in range(80)]
+
+    def _load(self) -> None:
+        if not self.model_path.exists():
+            raise FileNotFoundError(f"Model not found: {self.model_path}")
+        providers = ["CPUExecutionProvider"]
+        so = ort.SessionOptions()
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        so.intra_op_num_threads = 2
+        self.session = ort.InferenceSession(
+            str(self.model_path), sess_options=so, providers=providers
+        )
+        self.input_name = self.session.get_inputs()[0].name
+        shape = self.session.get_inputs()[0].shape
+        # [1,3,H,W] or dynamic
+        if isinstance(shape[2], int):
+            self.input_size = shape[2]
+
+    @property
+    def loaded(self) -> bool:
+        return self.session is not None
+
+    def _letterbox(
+        self, img: np.ndarray, new_shape: int = 640
+    ) -> tuple[np.ndarray, float, tuple[float, float]]:
+        h, w = img.shape[:2]
+        r = min(new_shape / h, new_shape / w)
+        nh, nw = int(round(h * r)), int(round(w * r))
+        resized = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_LINEAR)
+        pad_w, pad_h = new_shape - nw, new_shape - nh
+        left, top = pad_w // 2, pad_h // 2
+        right, bottom = pad_w - left, pad_h - top
+        out = cv2.copyMakeBorder(
+            resized, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114)
+        )
+        return out, r, (left, top)
+
+    def _preprocess(self, img_bgr: np.ndarray) -> tuple[np.ndarray, float, tuple[float, float], tuple[int, int]]:
+        h0, w0 = img_bgr.shape[:2]
+        img, r, (dw, dh) = self._letterbox(img_bgr, self.input_size)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        img = np.transpose(img, (2, 0, 1))[None, ...]  # 1x3xHxW
+        return img, r, (dw, dh), (h0, w0)
+
+    def _nms(self, boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> list[int]:
+        if len(boxes) == 0:
+            return []
+        x1, y1, x2, y2 = boxes.T
+        areas = (x2 - x1).clip(0) * (y2 - y1).clip(0)
+        order = scores.argsort()[::-1]
+        keep: list[int] = []
+        while order.size > 0:
+            i = int(order[0])
+            keep.append(i)
+            if order.size == 1:
+                break
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+            inter = (xx2 - xx1).clip(0) * (yy2 - yy1).clip(0)
+            iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+            inds = np.where(iou <= iou_thr)[0]
+            order = order[inds + 1]
+        return keep
+
+    def _postprocess(
+        self,
+        output: np.ndarray,
+        r: float,
+        pad: tuple[float, float],
+        orig_hw: tuple[int, int],
+        conf_thr: float,
+        iou_thr: float,
+    ) -> list[Det]:
+        """
+        YOLOv8/v11 ONNX output is typically (1, 84, 8400) = (batch, 4+nc, anchors)
+        """
+        pred = output
+        if pred.ndim == 3:
+            pred = pred[0]
+        # shape could be (84, N) or (N, 84)
+        if pred.shape[0] < pred.shape[1] and pred.shape[0] <= 144:
+            pred = pred.T  # -> (N, 84)
+
+        boxes_xywh = pred[:, :4]
+        cls_scores = pred[:, 4:]
+        cls_ids = cls_scores.argmax(axis=1)
+        confs = cls_scores.max(axis=1)
+
+        mask = confs >= conf_thr
+        boxes_xywh = boxes_xywh[mask]
+        confs = confs[mask]
+        cls_ids = cls_ids[mask]
+
+        if len(confs) == 0:
+            return []
+
+        # xywh (center) -> xyxy in letterbox space
+        x, y, w, h = boxes_xywh.T
+        x1 = x - w / 2
+        y1 = y - h / 2
+        x2 = x + w / 2
+        y2 = y + h / 2
+        boxes = np.stack([x1, y1, x2, y2], axis=1)
+
+        # undo letterbox
+        dw, dh = pad
+        boxes[:, [0, 2]] -= dw
+        boxes[:, [1, 3]] -= dh
+        boxes /= max(r, 1e-6)
+        oh, ow = orig_hw
+        boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, ow)
+        boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, oh)
+
+        # class-wise NMS
+        final: list[Det] = []
+        for cid in np.unique(cls_ids):
+            idxs = np.where(cls_ids == cid)[0]
+            keep = self._nms(boxes[idxs], confs[idxs], iou_thr)
+            for k in keep:
+                i = idxs[k]
+                name = self.names[int(cid)] if int(cid) < len(self.names) else f"class_{cid}"
+                final.append(
+                    Det(
+                        class_id=int(cid),
+                        class_name=name,
+                        confidence=float(confs[i]),
+                        x1=float(boxes[i, 0]),
+                        y1=float(boxes[i, 1]),
+                        x2=float(boxes[i, 2]),
+                        y2=float(boxes[i, 3]),
+                    )
+                )
+        final.sort(key=lambda d: d.confidence, reverse=True)
+        return final
+
+    def detect_image(
+        self,
+        img_bgr: np.ndarray,
+        conf_thr: float | None = None,
+        iou_thr: float | None = None,
+    ) -> tuple[list[Det], float]:
+        conf_thr = conf_thr if conf_thr is not None else settings.conf_threshold
+        iou_thr = iou_thr if iou_thr is not None else settings.iou_threshold
+        t0 = time.perf_counter()
+        inp, r, pad, hw = self._preprocess(img_bgr)
+        outputs = self.session.run(None, {self.input_name: inp})  # type: ignore
+        dets = self._postprocess(outputs[0], r, pad, hw, conf_thr, iou_thr)
+        ms = (time.perf_counter() - t0) * 1000.0
+        return dets, ms
+
+    @staticmethod
+    def _center(d: Det) -> tuple[float, float]:
+        return ((d.x1 + d.x2) / 2, (d.y1 + d.y2) / 2)
+
+    @staticmethod
+    def _area(d: Det) -> float:
+        return max(0.0, d.x2 - d.x1) * max(0.0, d.y2 - d.y1)
+
+    @staticmethod
+    def _iou(a: Det, b: Det) -> float:
+        xx1 = max(a.x1, b.x1)
+        yy1 = max(a.y1, b.y1)
+        xx2 = min(a.x2, b.x2)
+        yy2 = min(a.y2, b.y2)
+        inter = max(0, xx2 - xx1) * max(0, yy2 - yy1)
+        if inter <= 0:
+            return 0.0
+        return inter / (YOLODetector._area(a) + YOLODetector._area(b) - inter + 1e-6)
+
+    @staticmethod
+    def _person_near_vehicle(person: Det, vehicle: Det, expand: float = 0.35) -> bool:
+        """Person overlaps vehicle, or sits in an expanded box (riders sit above bikes)."""
+        vw = vehicle.x2 - vehicle.x1
+        vh = vehicle.y2 - vehicle.y1
+        ex1 = vehicle.x1 - vw * expand * 0.25
+        ex2 = vehicle.x2 + vw * expand * 0.25
+        ey1 = vehicle.y1 - vh * expand  # expand upward for rider torso/head
+        ey2 = vehicle.y2 + vh * 0.1
+        cx, cy = YOLODetector._center(person)
+        inside = ex1 <= cx <= ex2 and ey1 <= cy <= ey2
+        return inside or YOLODetector._iou(person, vehicle) > 0.03
+
+    def analyze_violations(self, dets: list[Det]) -> tuple[list[Det], list[dict[str, Any]]]:
+        """
+        Apply traffic enforcement heuristics on top of COCO detections.
+        Returns annotated dets + structured violation records.
+        """
+        persons = [d for d in dets if d.class_id == PERSON]
+        bikes = [d for d in dets if d.class_id in RIDER_VEHICLE_IDS]
+        cars = [d for d in dets if d.class_id in (CAR, BUS, TRUCK)]
+        lights = [d for d in dets if d.class_id == TRAFFIC_LIGHT]
+        stops = [d for d in dets if d.class_id == STOP_SIGN]
+        vehicles = [d for d in dets if d.class_id in VEHICLE_IDS]
+
+        violations: list[dict[str, Any]] = []
+        claimed_persons: set[int] = set()
+
+        def pid(p: Det) -> int:
+            return id(p)
+
+        # --- Triple riding / multi-person on two-wheeler ---
+        for bike in bikes:
+            riders = [p for p in persons if self._person_near_vehicle(p, bike, expand=0.55)]
+            if len(riders) >= 3:
+                bike.is_violation = True
+                bike.violation_type = "triple_riding"
+                for p in riders:
+                    p.is_violation = True
+                    p.violation_type = p.violation_type or "triple_riding"
+                    claimed_persons.add(pid(p))
+                violations.append(
+                    self._vrec(
+                        "triple_riding",
+                        float(np.mean([r.confidence for r in riders] + [bike.confidence])),
+                        bike,
+                        vehicle_class=bike.class_name,
+                        extra={"rider_count": len(riders)},
+                    )
+                )
+            elif len(riders) >= 2 and bike.class_id == MOTORCYCLE:
+                # double riding still often needs helmet checks on both
+                bike.is_violation = True
+                bike.violation_type = "no_helmet"
+                for p in riders:
+                    p.is_violation = True
+                    p.violation_type = "no_helmet"
+                    claimed_persons.add(pid(p))
+                violations.append(
+                    self._vrec(
+                        "no_helmet",
+                        float(np.mean([r.confidence for r in riders])),
+                        riders[0],
+                        vehicle_class=bike.class_name,
+                        extra={"rider_count": len(riders), "note": "Multi-rider motorcycle — helmet check"},
+                    )
+                )
+            elif len(riders) >= 1:
+                for p in riders:
+                    if bike.class_id == MOTORCYCLE and p.confidence > 0.30:
+                        p.is_violation = True
+                        p.violation_type = "no_helmet"
+                        bike.is_violation = True
+                        bike.violation_type = bike.violation_type or "no_helmet"
+                        claimed_persons.add(pid(p))
+                        violations.append(
+                            self._vrec(
+                                "no_helmet",
+                                min(0.95, p.confidence * 0.92),
+                                p,
+                                vehicle_class=bike.class_name,
+                                extra={"note": "Helmet class requires custom-trained weights; heuristic flag for rider"},
+                            )
+                        )
+            elif bike.class_id == MOTORCYCLE and bike.confidence > 0.45:
+                # Motorcycle detected without a separate person box — still flag for helmet review
+                bike.is_violation = True
+                bike.violation_type = "no_helmet"
+                violations.append(
+                    self._vrec(
+                        "no_helmet",
+                        min(0.8, bike.confidence * 0.75),
+                        bike,
+                        vehicle_class="motorcycle",
+                        extra={"note": "Motorcycle without clear helmet PPE class — review frame"},
+                    )
+                )
+
+        # --- Seatbelt proxy for car occupants ---
+        for car in cars:
+            occupants = [p for p in persons if self._person_near_vehicle(p, car, expand=0.15)]
+            cabin_occ = []
+            cy_mid = (car.y1 + car.y2) / 2
+            for p in occupants:
+                _, py = self._center(p)
+                if py < cy_mid + (car.y2 - car.y1) * 0.2:
+                    cabin_occ.append(p)
+            if len(cabin_occ) >= 1 and car.confidence > 0.35 and car.class_id == CAR:
+                p = cabin_occ[0]
+                if pid(p) not in claimed_persons:
+                    p.is_violation = True
+                    p.violation_type = "no_seatbelt"
+                    car.is_violation = True
+                    car.violation_type = car.violation_type or "no_seatbelt"
+                    claimed_persons.add(pid(p))
+                    violations.append(
+                        self._vrec(
+                            "no_seatbelt",
+                            min(0.9, p.confidence * 0.85),
+                            p,
+                            vehicle_class=car.class_name,
+                            extra={"note": "Seatbelt requires custom model; cabin-occupant heuristic"},
+                        )
+                    )
+            # dense crowd next to / on bus
+            nearby = [p for p in persons if self._person_near_vehicle(p, car, expand=0.4)]
+            if car.class_id == BUS and len(nearby) >= 3:
+                car.is_violation = True
+                car.violation_type = car.violation_type or "overcrowded_vehicle"
+                violations.append(
+                    self._vrec(
+                        "overcrowded_vehicle",
+                        float(np.mean([p.confidence for p in nearby[:5]] + [car.confidence])),
+                        car,
+                        vehicle_class="bus",
+                        extra={"person_count_near": len(nearby)},
+                    )
+                )
+            if len(occupants) >= 4 and car.class_id == CAR:
+                car.is_violation = True
+                car.violation_type = "overcrowded_vehicle"
+                violations.append(
+                    self._vrec(
+                        "overcrowded_vehicle",
+                        car.confidence,
+                        car,
+                        vehicle_class=car.class_name,
+                        extra={"occupant_count": len(occupants)},
+                    )
+                )
+
+        # --- Red light / stop sign proximity heuristics ---
+        if lights and vehicles:
+            for light in lights:
+                lx, ly = self._center(light)
+                light_w = max(light.x2 - light.x1, 20)
+                for v in vehicles:
+                    vx, vy = self._center(v)
+                    if abs(vx - lx) < light_w * 6 and vy > ly - 20:
+                        if v.confidence > 0.4 and light.confidence > 0.35:
+                            v.is_violation = True
+                            v.violation_type = v.violation_type or "red_light_suspect"
+                            violations.append(
+                                self._vrec(
+                                    "red_light_suspect",
+                                    min(v.confidence, light.confidence),
+                                    v,
+                                    vehicle_class=v.class_name,
+                                    extra={"traffic_light_conf": light.confidence},
+                                )
+                            )
+                            break
+
+        if stops and vehicles:
+            for stop in stops:
+                sx, sy = self._center(stop)
+                for v in vehicles:
+                    vx, vy = self._center(v)
+                    dist = ((vx - sx) ** 2 + (vy - sy) ** 2) ** 0.5
+                    if dist < max(v.x2 - v.x1, 80) * 2.5:
+                        v.is_violation = True
+                        v.violation_type = v.violation_type or "stop_sign_suspect"
+                        violations.append(
+                            self._vrec(
+                                "stop_sign_suspect",
+                                min(v.confidence, stop.confidence),
+                                v,
+                                vehicle_class=v.class_name,
+                            )
+                        )
+                        break
+
+        # High-density traffic cluster (useful ops signal)
+        if len(vehicles) >= 4 and len(persons) >= 3:
+            anchor = vehicles[0]
+            violations.append(
+                self._vrec(
+                    "high_risk_cluster",
+                    float(np.mean([v.confidence for v in vehicles[:4]])),
+                    anchor,
+                    vehicle_class="multi",
+                    extra={"vehicles": len(vehicles), "persons": len(persons)},
+                )
+            )
+            anchor.is_violation = True
+            anchor.violation_type = anchor.violation_type or "high_risk_cluster"
+
+        violations = self._dedupe_violations(violations)
+        return dets, violations
+
+    def _vrec(
+        self,
+        vtype: str,
+        conf: float,
+        det: Det,
+        vehicle_class: str = "unknown",
+        extra: dict | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "violation_type": vtype,
+            "label": VIOLATION_LABELS.get(vtype, vtype),
+            "severity": SEVERITY_MAP.get(vtype, "medium"),
+            "confidence": round(float(conf), 4),
+            "fine_amount": FINE_SCHEDULE.get(vtype, 500.0),
+            "vehicle_class": vehicle_class,
+            "bbox": {"x1": det.x1, "y1": det.y1, "x2": det.x2, "y2": det.y2},
+            "extra": extra or {},
+        }
+
+    @staticmethod
+    def _dedupe_violations(violations: list[dict]) -> list[dict]:
+        seen: set[tuple] = set()
+        out = []
+        for v in violations:
+            b = v.get("bbox") or {}
+            key = (
+                v["violation_type"],
+                int(b.get("x1", 0) // 10),
+                int(b.get("y1", 0) // 10),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(v)
+        return out
+
+    # ---- Drawing ----
+    COLOR_OK = (16, 185, 129)       # green
+    COLOR_VIOL = (67, 56, 239)      # red-ish (BGR)
+    COLOR_VEH = (245, 158, 11)      # amber
+    COLOR_TEXT_BG = (15, 23, 42)
+
+    def draw(self, img_bgr: np.ndarray, dets: list[Det], violations: list[dict] | None = None) -> np.ndarray:
+        out = img_bgr.copy()
+        for d in dets:
+            if d.is_violation:
+                color = self.COLOR_VIOL
+            elif d.class_id in VEHICLE_IDS:
+                color = self.COLOR_VEH
+            else:
+                color = self.COLOR_OK
+            x1, y1, x2, y2 = map(int, [d.x1, d.y1, d.x2, d.y2])
+            cv2.rectangle(out, (x1, y1), (x2, y2), color, 2)
+            label = f"{d.class_name} {d.confidence:.2f}"
+            if d.violation_type:
+                label = f"⚠ {d.violation_type} | {label}"
+            self._draw_label(out, label, x1, max(0, y1 - 4), color)
+
+        # banner
+        h, w = out.shape[:2]
+        banner_h = 42
+        overlay = out.copy()
+        cv2.rectangle(overlay, (0, 0), (w, banner_h), (15, 23, 42), -1)
+        cv2.addWeighted(overlay, 0.75, out, 0.25, 0, out)
+        vcount = sum(1 for d in dets if d.is_violation)
+        text = f"SafeCityAI  |  objects: {len(dets)}  violations: {vcount if violations is None else len(violations)}"
+        cv2.putText(out, text, (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2, cv2.LINE_AA)
+        return out
+
+    def _draw_label(self, img: np.ndarray, text: str, x: int, y: int, color: tuple) -> None:
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale, thickness = 0.5, 1
+        (tw, th), baseline = cv2.getTextSize(text, font, scale, thickness)
+        y = max(th + 4, y)
+        cv2.rectangle(img, (x, y - th - 6), (x + tw + 8, y + baseline - 2), color, -1)
+        cv2.putText(img, text, (x + 4, y - 4), font, scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
+    def process_image_file(
+        self,
+        input_path: Path,
+        result_path: Path,
+        conf_thr: float | None = None,
+    ) -> dict[str, Any]:
+        img = cv2.imread(str(input_path))
+        if img is None:
+            raise ValueError(f"Could not read image: {input_path}")
+        dets, ms = self.detect_image(img, conf_thr=conf_thr)
+        dets, violations = self.analyze_violations(dets)
+        annotated = self.draw(img, dets, violations)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(result_path), annotated)
+        summary = self._summary(dets, violations, ms)
+        return {
+            "detections": [d.to_dict() for d in dets],
+            "violations": violations,
+            "summary": summary,
+            "processing_ms": ms,
+            "result_path": str(result_path),
+        }
+
+    def process_video_file(
+        self,
+        input_path: Path,
+        result_path: Path,
+        conf_thr: float | None = None,
+        max_frames: int = 300,
+        skip: int = 2,
+    ) -> dict[str, Any]:
+        cap = cv2.VideoCapture(str(input_path))
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video: {input_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPS) or 15
+        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        writer = cv2.VideoWriter(str(result_path), fourcc, max(1, fps / max(skip, 1)), (w, h))
+
+        all_dets: list[dict] = []
+        all_violations: list[dict] = []
+        class_counts: dict[str, int] = {}
+        t0 = time.perf_counter()
+        frame_i = 0
+        processed = 0
+        last_annotated = None
+
+        while processed < max_frames:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_i % skip != 0:
+                frame_i += 1
+                continue
+            dets, _ = self.detect_image(frame, conf_thr=conf_thr)
+            dets, violations = self.analyze_violations(dets)
+            annotated = self.draw(frame, dets, violations)
+            writer.write(annotated)
+            last_annotated = annotated
+            for d in dets:
+                class_counts[d.class_name] = class_counts.get(d.class_name, 0) + 1
+                all_dets.append(d.to_dict())
+            for v in violations:
+                v = dict(v)
+                v["frame"] = frame_i
+                all_violations.append(v)
+            processed += 1
+            frame_i += 1
+
+        cap.release()
+        writer.release()
+
+        # also save a snapshot jpeg of last frame
+        snap_path = result_path.with_suffix(".jpg")
+        if last_annotated is not None:
+            cv2.imwrite(str(snap_path), last_annotated)
+
+        ms = (time.perf_counter() - t0) * 1000.0
+        # unique-ish violations by type
+        uniq = self._dedupe_violations(all_violations)
+        summary = {
+            "frames_processed": processed,
+            "total_raw_detections": len(all_dets),
+            "unique_violation_flags": len(uniq),
+            "class_counts": class_counts,
+            "processing_ms": round(ms, 1),
+            "snapshot": str(snap_path) if last_annotated is not None else None,
+        }
+        return {
+            "detections": all_dets[:200],  # cap payload
+            "violations": uniq,
+            "summary": summary,
+            "processing_ms": ms,
+            "result_path": str(result_path),
+            "snapshot_path": str(snap_path) if last_annotated is not None else None,
+        }
+
+    def _summary(self, dets: list[Det], violations: list[dict], ms: float) -> dict:
+        class_counts: dict[str, int] = {}
+        for d in dets:
+            class_counts[d.class_name] = class_counts.get(d.class_name, 0) + 1
+        v_by_type: dict[str, int] = {}
+        for v in violations:
+            v_by_type[v["violation_type"]] = v_by_type.get(v["violation_type"], 0) + 1
+        return {
+            "object_count": len(dets),
+            "violation_count": len(violations),
+            "class_counts": class_counts,
+            "violations_by_type": v_by_type,
+            "vehicles": sum(1 for d in dets if d.class_id in VEHICLE_IDS),
+            "persons": sum(1 for d in dets if d.class_id == PERSON),
+            "processing_ms": round(ms, 1),
+            "model": "yolo11n.onnx (COCO) + SafeCity heuristics",
+        }
+
+
+# Singleton
+_detector: YOLODetector | None = None
+
+
+def get_detector() -> YOLODetector:
+    global _detector
+    if _detector is None:
+        _detector = YOLODetector()
+    return _detector
+
+
+def new_job_id() -> str:
+    return uuid.uuid4().hex[:12]

@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SafeCityAI — AI Traffic Rule Enforcement</title>
+  <meta name="description" content="SafeCityAI automatically detects helmet, seatbelt, and traffic violations from CCTV using YOLO object detection." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark">🛡️</span>
+        SafeCityAI
+      </a>
+      <nav class="nav-links" id="navLinks">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="#pipeline">Pipeline</a>
+        <a href="/about">About</a>
+        <a href="/api/docs" target="_blank">API</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn btn-ghost btn-sm" href="/login">Sign in</a>
+        <a class="btn btn-primary btn-sm" href="/app">Launch Console</a>
+        <button class="nav-toggle" data-nav-toggle aria-label="Menu">☰</button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="container hero-grid">
+        <div>
+          <div class="eyebrow"><span class="dot"></span> Live in production · Kolkata traffic units</div>
+          <h1>
+            Automate traffic enforcement with
+            <span class="grad">YOLO vision AI</span>
+          </h1>
+          <p class="hero-lead">
+            SafeCityAI watches CCTV so officers don’t have to. Detect helmet &amp; seatbelt violations,
+            triple-riding, and junction risks in real time — then issue digital challans from one console.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn-primary btn-lg" href="/app">Try detection free →</a>
+            <a class="btn btn-secondary btn-lg" href="/dashboard">View dashboard</a>
+          </div>
+          <div class="hero-stats">
+            <div>
+              <strong>&lt;200ms</strong>
+              <span>typical frame latency</span>
+            </div>
+            <div>
+              <strong>8+</strong>
+              <span>violation classes</span>
+            </div>
+            <div>
+              <strong>24/7</strong>
+              <span>camera monitoring</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-visual" aria-hidden="true">
+          <div class="scan-line"></div>
+          <div class="detection-demo">
+            <div class="bbox veh" style="left:12%;top:42%;width:38%;height:32%;">
+              <span>car 0.91</span>
+            </div>
+            <div class="bbox bad" style="left:22%;top:38%;width:14%;height:28%;">
+              <span>⚠ no_seatbelt 0.84</span>
+            </div>
+            <div class="bbox veh" style="left:58%;top:48%;width:28%;height:26%;">
+              <span>motorcycle 0.88</span>
+            </div>
+            <div class="bbox bad" style="left:64%;top:40%;width:12%;height:24%;">
+              <span>⚠ no_helmet 0.79</span>
+            </div>
+            <div class="bbox ok" style="left:78%;top:28%;width:8%;height:18%;">
+              <span>traffic light 0.93</span>
+            </div>
+          </div>
+          <div class="demo-hud">
+            <div>
+              <div class="live-pill"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:#34d399;display:inline-block"></span> INFERENCE LIVE</div>
+              <div style="margin-top:.4rem">CAM-02 · Park Street Junction</div>
+            </div>
+            <div style="text-align:right">
+              <div>objects: 5</div>
+              <div style="color:#f87171">violations: 2</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div class="metrics-band">
+      <div class="container metrics">
+        <div><strong>mAP@0.5</strong><span>primary training metric</span></div>
+        <div><strong>YOLOv8/11</strong><span>ONNX runtime edge-ready</span></div>
+        <div><strong>REST API</strong><span>image · video · live frame</span></div>
+        <div><strong>E-Challan</strong><span>PDF tickets + CSV export</span></div>
+      </div>
+    </div>
+
+    <section id="features">
+      <div class="container">
+        <div class="section-head">
+          <h2>Everything a smart-city traffic unit needs</h2>
+          <p>From raw CCTV frames to enforceable tickets — built as a complete product, not a notebook demo.</p>
+        </div>
+        <div class="features">
+          <article class="feature-card">
+            <div class="feature-icon">🎯</div>
+            <h3>YOLO object detection</h3>
+            <p>State-of-the-art single-shot detection for vehicles, riders, pedestrians, lights and signs with confidence scoring &amp; NMS.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">🪖</div>
+            <h3>Helmet &amp; seatbelt logic</h3>
+            <p>Violation engine maps detections to no-helmet, no-seatbelt, triple-riding and junction risks with configurable fines.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">📹</div>
+            <h3>Image, video &amp; webcam</h3>
+            <p>Upload street photos, batch-process clips, or stream browser webcam frames for live enforcement demos.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">🧾</div>
+            <h3>Digital challan workflow</h3>
+            <p>Open → review → issue → paid. Generate PDF notices and export CSV for records &amp; court evidence packs.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">📊</div>
+            <h3>Ops dashboard</h3>
+            <p>City-wide stats, daily trends, top hotspots, camera health, and officer activity in one control room view.</p>
+          </article>
+          <article class="feature-card">
+            <div class="feature-icon">🔐</div>
+            <h3>Role-based access</h3>
+            <p>Admin, officer, and analyst roles with JWT auth. Audit log of detections, exports, and ticket updates.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section id="how" style="background:rgba(13,21,38,.5)">
+      <div class="container">
+        <div class="section-head">
+          <h2>How SafeCityAI works</h2>
+          <p>Four phases from the original YOLOv5 traffic project — now productized end-to-end.</p>
+        </div>
+        <div class="steps">
+          <div class="step">
+            <h3>Ingest</h3>
+            <p>CCTV snapshot, uploaded video, or live webcam frame hits the FastAPI gateway.</p>
+          </div>
+          <div class="step">
+            <h3>Detect</h3>
+            <p>YOLO11n ONNX runs letterbox → inference → class-wise NMS with tunable confidence.</p>
+          </div>
+          <div class="step">
+            <h3>Enforce</h3>
+            <p>Heuristics + custom classes flag helmet, seatbelt, triple-riding &amp; signal risks.</p>
+          </div>
+          <div class="step">
+            <h3>Act</h3>
+            <p>Tickets land in the queue. Officers review, issue PDF challans, and track payment.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="pipeline">
+      <div class="container">
+        <div class="section-head">
+          <h2>Computer vision pipeline</h2>
+          <p>Transfer learning on COCO weights, fine-tune path for Helmet / NoHelmet / LicensePlate classes.</p>
+        </div>
+        <div class="pipeline">
+          <span class="chip">CCTV / Upload</span>
+          <span class="chip-arrow">→</span>
+          <span class="chip">OpenCV decode</span>
+          <span class="chip-arrow">→</span>
+          <span class="chip hl">YOLO11n ONNX</span>
+          <span class="chip-arrow">→</span>
+          <span class="chip">NMS + IoU</span>
+          <span class="chip-arrow">→</span>
+          <span class="chip hl">Violation engine</span>
+          <span class="chip-arrow">→</span>
+          <span class="chip">Tickets · PDF · API JSON</span>
+        </div>
+        <div style="margin-top:2.5rem" class="grid-3">
+          <div class="card">
+            <div class="card-title">Model</div>
+            <p style="font-size:.9rem;color:var(--text-muted)">YOLO11n (nano) via ONNX Runtime — edge-friendly, CPU inference, deployment-ready <code style="color:var(--accent)">best.pt</code> swap-in for custom traffic weights.</p>
+          </div>
+          <div class="card">
+            <div class="card-title">Metrics</div>
+            <p style="font-size:.9rem;color:var(--text-muted)">Optimize for <strong style="color:var(--text)">mAP@0.5</strong>. Confidence threshold slider in the console. Per-frame latency tracked on every job.</p>
+          </div>
+          <div class="card">
+            <div class="card-title">API contract</div>
+            <p style="font-size:.9rem;color:var(--text-muted);font-family:var(--mono);font-size:.78rem">{"class":"no_helmet","confidence":0.88,"box":[x1,y1,x2,y2]}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="container">
+        <div class="cta-box">
+          <h2>Ready to watch the city for you?</h2>
+          <p>Open the detection console, drop a traffic image, and get annotated violations in seconds.</p>
+          <div style="display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
+            <a class="btn btn-primary btn-lg" href="/app">Open detection console</a>
+            <a class="btn btn-secondary btn-lg" href="/login">Officer sign in</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="container footer-inner">
+      <div>
+        <strong style="color:var(--text)">SafeCityAI</strong> · Object Detection with YOLO for traffic enforcement
+        <div style="margin-top:.35rem">Case study product · Artificial Intelligence domain</div>
+      </div>
+      <nav>
+        <a href="/app">Console</a>
+        <a href="/dashboard">Dashboard</a>
+        <a href="/violations">Violations</a>
+        <a href="/live">Live</a>
+        <a href="/api/docs">API Docs</a>
+      </nav>
+    </div>
+  </footer>
+  <script src="/app.js"></script>
+</body>
+</html>

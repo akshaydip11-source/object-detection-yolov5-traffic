@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Webcam · SafeCityAI</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">🛡️</span> SafeCityAI</a>
+      <nav class="side-nav">
+        <a href="/app">⚡ Detect</a>
+        <a href="/live" class="active">📹 Live webcam</a>
+        <a href="/dashboard">📊 Dashboard</a>
+        <a href="/violations">🎫 Violations</a>
+        <a href="/about">ℹ️ About</a>
+        <a href="/api/docs" target="_blank">🛠 API docs</a>
+      </nav>
+      <div class="side-footer">Browser webcam → YOLO frames</div>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <div style="display:flex;align-items:center;gap:.75rem">
+          <button class="nav-toggle" data-nav-toggle>☰</button>
+          <h1>Live Webcam Detection</h1>
+        </div>
+        <div id="userChip"></div>
+      </header>
+      <div class="page">
+        <div class="live-grid">
+          <div>
+            <div class="video-stage" id="stage">
+              <video id="video" playsinline muted autoplay></video>
+              <img id="overlay" class="hidden" alt="Annotated frame" />
+              <div class="loading-overlay hidden" id="loading">
+                <div style="text-align:center">
+                  <div class="spinner" style="width:36px;height:36px;border-width:3px;margin:0 auto .75rem"></div>
+                  <div style="color:var(--text-muted);font-size:.85rem">Running inference…</div>
+                </div>
+              </div>
+            </div>
+            <div class="live-controls">
+              <button class="btn btn-primary" id="startBtn">Start camera</button>
+              <button class="btn btn-secondary" id="snapBtn" disabled>Capture &amp; detect</button>
+              <button class="btn btn-accent" id="loopBtn" disabled>Auto-detect loop</button>
+              <button class="btn btn-danger" id="stopBtn" disabled>Stop</button>
+            </div>
+            <div class="form-row" style="margin-top:1rem">
+              <div class="field">
+                <label>Confidence</label>
+                <input type="range" id="conf" min="0.15" max="0.85" step="0.05" value="0.4" />
+                <span id="confVal" style="font-family:var(--mono);font-size:.8rem;color:var(--accent)">0.40</span>
+              </div>
+              <div class="field">
+                <label>Loop interval (sec)</label>
+                <input type="number" id="interval" min="2" max="30" value="4" />
+              </div>
+              <div class="field">
+                <label>Create tickets</label>
+                <select id="tickets">
+                  <option value="false" selected>No (preview only)</option>
+                  <option value="true">Yes</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">Live readout</div>
+            <div class="stat-card" style="margin-bottom:.75rem">
+              <div class="label">Status</div>
+              <div class="value" id="status" style="font-size:1.1rem">Idle</div>
+            </div>
+            <div class="grid-stats" style="margin-bottom:1rem">
+              <div class="stat-card" style="padding:.75rem">
+                <div class="label">Objects</div>
+                <div class="value" id="sObj" style="font-size:1.3rem">0</div>
+              </div>
+              <div class="stat-card" style="padding:.75rem">
+                <div class="label">Violations</div>
+                <div class="value" id="sViol" style="font-size:1.3rem;color:var(--danger-2)">0</div>
+              </div>
+            </div>
+            <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:.75rem;font-family:var(--mono)">
+              Latency: <span id="sMs">—</span>
+            </div>
+            <div class="card-title">Last detections</div>
+            <div id="detList" class="det-list" style="max-height:360px">
+              <div class="empty-state" style="padding:1rem">Start camera and capture a frame</div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="margin-top:1.25rem">
+          <p style="font-size:.9rem;color:var(--text-muted)">
+            <strong style="color:var(--text)">Privacy:</strong> video stays in your browser until you capture.
+            Frames are sent to the SafeCityAI API only when you run detection. Use a traffic video playing on another screen for demos if you lack a street-facing camera.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script src="/app.js"></script>
+  <script>
+    SafeCity.mountUserChip(document.getElementById("userChip"));
+    let stream = null, loopTimer = null, looping = false;
+
+    const video = document.getElementById("video");
+    const overlay = document.getElementById("overlay");
+    const conf = document.getElementById("conf");
+    conf.addEventListener("input", () => {
+      document.getElementById("confVal").textContent = Number(conf.value).toFixed(2);
+    });
+
+    document.getElementById("startBtn").addEventListener("click", async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        video.srcObject = stream;
+        overlay.classList.add("hidden");
+        video.classList.remove("hidden");
+        document.getElementById("snapBtn").disabled = false;
+        document.getElementById("loopBtn").disabled = false;
+        document.getElementById("stopBtn").disabled = false;
+        document.getElementById("status").textContent = "Camera on";
+        SafeCity.toast("Camera started");
+      } catch (e) {
+        SafeCity.toast("Camera access denied: " + e.message, "err");
+      }
+    });
+
+    function stopAll() {
+      if (loopTimer) clearInterval(loopTimer);
+      loopTimer = null;
+      looping = false;
+      document.getElementById("loopBtn").textContent = "Auto-detect loop";
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        stream = null;
+      }
+      video.srcObject = null;
+      document.getElementById("snapBtn").disabled = true;
+      document.getElementById("loopBtn").disabled = true;
+      document.getElementById("stopBtn").disabled = true;
+      document.getElementById("status").textContent = "Stopped";
+    }
+    document.getElementById("stopBtn").addEventListener("click", stopAll);
+
+    async function captureAndDetect() {
+      if (!stream) return;
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(video, 0, 0);
+      const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+      if (!blob) throw new Error("Capture failed");
+
+      document.getElementById("loading").classList.remove("hidden");
+      document.getElementById("status").textContent = "Inferencing…";
+
+      const fd = new FormData();
+      fd.append("file", blob, "frame.jpg");
+      fd.append("conf_threshold", conf.value);
+      fd.append("camera_id", "CAM-LIVE");
+      fd.append("location", "Live Webcam");
+      fd.append("create_tickets", document.getElementById("tickets").value);
+
+      try {
+        const res = await fetch(`${API}/detect/frame`, {
+          method: "POST",
+          headers: SafeCity.token() ? { Authorization: `Bearer ${SafeCity.token()}` } : {},
+          body: fd,
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({ detail: res.statusText }));
+          throw new Error(err.detail || "Failed");
+        }
+        const data = await res.json();
+        if (data.result_url) {
+          overlay.src = data.result_url + "?t=" + Date.now();
+          overlay.classList.remove("hidden");
+        }
+        document.getElementById("sObj").textContent = data.object_count;
+        document.getElementById("sViol").textContent = data.violation_count;
+        document.getElementById("sMs").textContent = SafeCity.fmtMs(data.processing_ms);
+        document.getElementById("status").textContent = data.violation_count
+          ? `${data.violation_count} violation(s) flagged`
+          : "Clear — no violations";
+        const list = document.getElementById("detList");
+        list.innerHTML = (data.detections || []).slice(0, 20).map((d) => `
+          <div class="det-item ${d.is_violation ? "viol" : ""}">
+            <div class="name">${d.is_violation ? "⚠ " : ""}${d.class_name}</div>
+            <div style="font-family:var(--mono)">${(d.confidence*100).toFixed(0)}%</div>
+          </div>`).join("") || `<div class="empty-state" style="padding:1rem">No objects</div>`;
+      } finally {
+        document.getElementById("loading").classList.add("hidden");
+      }
+    }
+
+    document.getElementById("snapBtn").addEventListener("click", () => {
+      captureAndDetect().catch((e) => SafeCity.toast(e.message, "err"));
+    });
+
+    document.getElementById("loopBtn").addEventListener("click", () => {
+      if (looping) {
+        clearInterval(loopTimer);
+        loopTimer = null;
+        looping = false;
+        document.getElementById("loopBtn").textContent = "Auto-detect loop";
+        document.getElementById("status").textContent = "Camera on";
+        return;
+      }
+      looping = true;
+      document.getElementById("loopBtn").textContent = "Stop loop";
+      const sec = Math.max(2, Number(document.getElementById("interval").value) || 4);
+      captureAndDetect().catch((e) => SafeCity.toast(e.message, "err"));
+      loopTimer = setInterval(() => {
+        captureAndDetect().catch((e) => console.warn(e));
+      }, sec * 1000);
+    });
+  </script>
+</body>
+</html>

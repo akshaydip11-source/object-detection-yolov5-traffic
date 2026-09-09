@@ -1,0 +1,1 @@
+"""SafeCityAI backend package."""
