@@ -5,13 +5,13 @@ AI-powered traffic-rule enforcement application built around the SafeCityAI inte
 ## Project goal
 
 Detect traffic objects and violations from images/video and expose the inference pipeline through a FastAPI API.
-The internship target classes are **Helmet, NoHelmet, and LicensePlate**.
+The internship target classes are **`Helmet`, `No_Helmet`, and `License_Plate`**.
 
 ## Current application
 
-The shipped UI/API is runnable immediately using the included COCO-pretrained YOLO11n ONNX model plus traffic-rule heuristics. This provides a working end-to-end demo while the custom YOLOv5 model is trained.
+The shipped UI/API currently uses the included COCO-pretrained YOLO11n ONNX fallback. It does **not** satisfy the custom detector objective yet. The website now identifies the fallback honestly. The repository has no annotated dataset, trained YOLOv5 checkpoint, validation metrics, or custom detection demo video.
 
-The custom-model path is documented under `dataset/` and `training/`. The final internship model should be a YOLOv5s/YOLOv5m model trained on the annotated traffic dataset and saved as `best.pt`.
+The working YOLOv5s pipeline, Colab notebook, validation, video inference, and ONNX export steps are in `training/` and `docs/TRAINING.md`. Training cannot run until the annotated dataset has been added.
 
 ## Features
 
@@ -23,7 +23,7 @@ The custom-model path is documented under `dataset/` and `training/`. The final 
 - PDF challan and CSV export
 - FastAPI + OpenAPI documentation
 - Docker deployment configuration
-- YOLOv5 training/inference scaffolding
+- YOLOv5s training, validation, video inference, and ONNX export workflow
 
 ## Quick start (Windows)
 
@@ -56,13 +56,13 @@ The Blueprint uses a Free web service for demonstration. Its SQLite database and
 
 ## Custom YOLOv5 training
 
-1. Annotate approximately 200–500 traffic images in YOLO format.
-2. Put them under `dataset/images` and `dataset/labels`.
-3. Use `dataset/traffic.yaml`.
-4. Train YOLOv5s/YOLOv5m on Google Colab GPU.
-5. Evaluate mAP@0.5 and inspect loss curves.
-6. Save the resulting `best.pt` under `models/` locally; do not commit large/private weights unless required.
-7. Connect the trained model to the detector configuration and retest image/video/API inference.
+1. Annotate 200–500+ traffic images in YOLO format with class IDs from `dataset/traffic.yaml`.
+2. Split by source video into `dataset/images/{train,val}` and `dataset/labels/{train,val}`.
+3. Run `python training/train_yolov5.py --validate-only`, then `python training/train_yolov5.py --epochs 50 --batch 16` on a CUDA GPU.
+4. Review the generated training losses, per-class metrics, confusion matrix, and held-out video output. Do not claim mAP without the real validation results.
+5. The script exports `backend/weights/yolov5_custom.onnx` and `backend/weights/traffic.names`. Set `MODEL_PATH=weights/yolov5_custom.onnx` and `CLASS_NAMES_PATH=weights/traffic.names` to use them with the API.
+
+See [`training/safecityai_yolov5_training.ipynb`](training/safecityai_yolov5_training.ipynb) for the full Colab workflow. The actual dataset, trained weights, metrics, and demo video still need to be supplied/generated; this repository does not contain them.
 
 ## Repository structure
 
@@ -71,7 +71,7 @@ backend/       FastAPI application, database, services, model runtime
 frontend/      SafeCityAI web console
 api/           deployment API entry point
 inference/     video inference helper
-training/      YOLOv5 training scripts and notes
+training/      YOLOv5 training script, Colab notebook, and notes
 dataset/       YOLO dataset layout + traffic.yaml
 models/        local trained weights (gitignored)
 outputs/       generated inference outputs
@@ -81,10 +81,10 @@ server.py      local FastAPI entry point
 
 ## Internship deliverables
 
-- Annotated dataset: `dataset/`
-- Training materials: `training/`
-- Video inference: `inference/` and application video console
+- Annotated dataset: `dataset/` layout is ready; annotated files are not present yet
+- Training notebook and pipeline: `training/`
+- Video inference: `inference/` and application video console; a custom-model demo video is not present yet
 - API code: `api/server.py` + `backend/app/`
-- Final trained weights: `models/best.pt`
+- Final trained weights: not present; train after adding the annotated dataset
 
 The original brief requires custom training and does not permit treating the pretrained fallback model as the final custom detector.

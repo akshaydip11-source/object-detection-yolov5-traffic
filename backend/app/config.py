@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     upload_dir: Path = BASE_DIR / "uploads"
     weights_dir: Path = BASE_DIR / "weights"
     model_path: Path = BASE_DIR / "weights" / "yolo11n.onnx"
-    coco_names_path: Path = BASE_DIR / "weights" / "coco.names"
+    class_names_path: Path = BASE_DIR / "weights" / "coco.names"
     max_upload_mb: int = 50
     conf_threshold: float = 0.35
     iou_threshold: float = 0.45
@@ -26,5 +26,9 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+for path_field in ("upload_dir", "weights_dir", "model_path", "class_names_path"):
+    value = getattr(settings, path_field)
+    if not value.is_absolute():
+        setattr(settings, path_field, (BASE_DIR / value).resolve())
 for sub in ("images", "videos", "results", "reports"):
     (settings.upload_dir / sub).mkdir(parents=True, exist_ok=True)

@@ -74,6 +74,8 @@ def health():
         app=settings.app_name,
         model_loaded=loaded,
         model_path=str(settings.model_path),
+        model_name=det.model_label,
+        class_names=det.names,
     )
 
 

@@ -19,7 +19,7 @@
         <a href="/about">ℹ️ About</a>
         <a href="/api/docs" target="_blank">🛠 API docs</a>
       </nav>
-      <div class="side-footer">YOLO11n · ONNX Runtime<br/>Traffic enforcement v1.0</div>
+      <div class="side-footer"><span id="modelName">Loading detector…</span><br/><span id="modelNote">Model status</span></div>
     </aside>
 
     <div class="main">
@@ -156,6 +156,19 @@
     SafeCity.mountUserChip(document.getElementById("userChip"));
     SafeCity.refreshMe().then(() => SafeCity.mountUserChip(document.getElementById("userChip")));
 
+    fetch("/api/health").then(async (response) => {
+      if (!response.ok) throw new Error("Detector unavailable");
+      return response.json();
+    }).then((health) => {
+      document.getElementById("modelName").textContent = health.model_name;
+      document.getElementById("modelNote").textContent = health.model_name.includes("fallback")
+        ? "COCO demo · custom model not trained"
+        : `Classes: ${health.class_names.join(", ")}`;
+    }).catch(() => {
+      document.getElementById("modelName").textContent = "Detector unavailable";
+      document.getElementById("modelNote").textContent = "Check service health";
+    });
+
     const conf = document.getElementById("conf");
     const confVal = document.getElementById("confVal");
     conf.addEventListener("input", () => (confVal.textContent = Number(conf.value).toFixed(2)));
@@ -175,7 +188,7 @@
         } else {
           input.accept = "video/*";
           document.getElementById("dropTitle").textContent = "Drop traffic video here";
-          document.getElementById("dropHint").textContent = "MP4, AVI, MOV, WEBM · processed up to ~120 frames";
+          document.getElementById("dropHint").textContent = "MP4, AVI, MOV, MKV, WEBM · max 50 MB · samples across the full clip";
         }
       });
     });
@@ -195,9 +208,25 @@
     });
 
     function setFile(f) {
+      const extension = f.name.split(".").pop().toLowerCase();
+      const allowed = state.mode === "video"
+        ? ["mp4", "avi", "mov", "mkv", "webm"]
+        : ["jpg", "jpeg", "png", "bmp", "webp"];
+      if (!allowed.includes(extension)) {
+        state.file = null;
+        document.getElementById("runBtn").disabled = true;
+        SafeCity.toast(`Unsupported ${state.mode} file type`, "err");
+        return;
+      }
+      if (f.size > 50 * 1024 * 1024) {
+        state.file = null;
+        document.getElementById("runBtn").disabled = true;
+        SafeCity.toast("File exceeds the 50 MB upload limit", "err");
+        return;
+      }
       state.file = f;
       document.getElementById("dropTitle").textContent = f.name;
-      document.getElementById("dropHint").textContent = `${(f.size / 1024).toFixed(1)} KB ready`;
+      document.getElementById("dropHint").textContent = `${(f.size / 1024).toFixed(1)} KB ready · max 50 MB`;
       document.getElementById("runBtn").disabled = false;
     }
 

@@ -1,9 +1,9 @@
 # SafeCityAI custom YOLOv5 dataset configuration
-path: ./dataset
+path: ../dataset
 train: images/train
 val: images/val
 
 names:
   0: Helmet
-  1: NoHelmet
-  2: LicensePlate
+  1: No_Helmet
+  2: License_Plate

@@ -1,80 +1,68 @@
-# Training custom SafeCityAI weights (Helmet / NoHelmet / Plate)
+# SafeCityAI YOLOv5 Custom Training
 
-This product ships with **YOLO11n COCO ONNX** + a violation heuristic layer so demos work immediately.
-For production helmet/seatbelt accuracy, fine-tune on your annotated traffic dataset.
+The target detector is YOLOv5s fine-tuned from COCO-pretrained `yolov5s.pt` on exactly these classes:
 
-## 1. Dataset
+| Class ID | Name |
+| --- | --- |
+| 0 | `Helmet` |
+| 1 | `No_Helmet` |
+| 2 | `License_Plate` |
 
-Classes recommended:
+The repository currently contains no labeled training images, no custom `best.pt`, and no custom demo video. The deployed model is still the YOLO11n COCO fallback; heuristic violation flags are not evidence of a trained helmet detector. Provide the annotated dataset before claiming custom-model metrics or results.
 
-```
-0 Helmet
-1 NoHelmet
-2 Seatbelt
-3 NoSeatbelt
-4 LicensePlate
-5 Motorcycle
-6 Car
-7 Person
-```
+## Dataset layout
 
-- Collect 200–500+ frames from CCTV / dashcam
-- Annotate with [Roboflow](https://roboflow.com) or LabelImg
-- Export **YOLOv8** format (images + `.txt` labels)
-- Apply flip / brightness / mosaic augmentation
+Create a YOLO-format dataset with matching image and label paths:
 
-`data/traffic.yaml` example:
-
-```yaml
-path: /datasets/traffic
-train: images/train
-val: images/val
-names:
-  0: Helmet
-  1: NoHelmet
-  2: Seatbelt
-  3: NoSeatbelt
-  4: LicensePlate
-  5: Motorcycle
-  6: Car
-  7: Person
+```text
+dataset/
+├── images/
+│   ├── train/
+│   └── val/
+├── labels/
+│   ├── train/
+│   └── val/
+└── traffic.yaml
 ```
 
-## 2. Train (Ultralytics)
+Each `.txt` file has one normalized row per box: `class_id x_center y_center width height`. Image and label base names must match. Keep video sources and extracted frames split by source video: do not put frames from the same recording in both train and validation, or validation mAP will be misleading. Annotate helmet and plate boxes consistently; record occluded or ambiguous examples according to one policy.
+
+The case-study target is 200–500 annotated images. That is a starting target, not a guarantee of generalization. Add diverse scenes and inspect per-class precision/recall before using the model for enforcement.
+
+## Validate and train
+
+Use a CUDA GPU (Google Colab is suitable). Install the YOLOv5 requirements, then from the project root run:
 
 ```bash
-pip install ultralytics
-yolo detect train model=yolo11n.pt data=traffic.yaml epochs=50 imgsz=640 batch=16
+python training/train_yolov5.py --validate-only
+python training/train_yolov5.py --epochs 50 --batch 16
 ```
 
-Monitor **mAP@0.5** in `runs/detect/train/results.csv`.
+The script validates image/label pairs, class IDs, normalized boxes, and presence of every target class in train and validation before training. It fine-tunes `yolov5s.pt` with YOLOv5's `hyp.scratch-low.yaml`, evaluates `best.pt`, writes the standard `results.csv`/plots, and exports ONNX. Adjust `--batch` if the GPU runs out of memory. The notebook [`training/safecityai_yolov5_training.ipynb`](../training/safecityai_yolov5_training.ipynb) contains the Colab workflow, result plots, and video inference steps.
 
-## 3. Export ONNX
+Review `runs/train/<run>/results.png`, the loss curves, confusion matrix, and `runs/val/<run>/results.txt`. Record per-class precision, recall, mAP@0.5, and mAP@0.5:0.95. Do not report results until a validation run finishes on data kept separate from training.
+
+## Video inference
+
+Run on a held-out video after training:
 
 ```bash
-yolo export model=runs/detect/train/weights/best.pt format=onnx opset=12
-cp runs/detect/train/weights/best.onnx backend/weights/yolo11n.onnx
+python yolov5/detect.py --weights runs/train/<run>/weights/best.pt \
+  --source path/to/held-out-video.mp4 --img 640 --conf-thres 0.5 \
+  --save-txt --save-conf --project outputs --name safecityai-video
 ```
 
-Update `backend/weights/coco.names` (or a new names file) to match your classes, and
-adjust `PERSON` / `MOTORCYCLE` / violation maps in `backend/app/services/detector.py`.
+The annotated video and frame labels are written under `outputs/safecityai-video/`. Review the result manually for false positives, missed small helmets, and plate readability.
 
-## 4. Evaluate
+## Run the custom model through the API
 
-```bash
-yolo detect val model=best.pt data=traffic.yaml
-# Video demo
-yolo detect predict model=best.pt source=test_street.mp4 conf=0.5
+Training exports `backend/weights/yolov5_custom.onnx` and writes the matching `backend/weights/traffic.names`. For local use, set:
+
+```text
+MODEL_PATH=weights/yolov5_custom.onnx
+CLASS_NAMES_PATH=weights/traffic.names
 ```
 
-## 5. API contract (unchanged)
+For Render, commit the custom ONNX and names files with the app source (or use an artifact download step) and set those same variables in the service environment. The Dockerfile copies `backend/weights` into `/app/backend/weights`. Redeploy and confirm `/api/health` reports the custom YOLOv5 model before testing `/api/detect/image` and `/api/detect/video`.
 
-```json
-{
-  "class_name": "NoHelmet",
-  "confidence": 0.88,
-  "box": { "x1": 100, "y1": 200, "x2": 150, "y2": 260 },
-  "is_violation": true,
-  "violation_type": "no_helmet"
-}
-```
+The upload API returns each detection with `class_id`, `class_name`, `confidence`, and pixel-corner `box` coordinates, plus a summary and annotated media URLs. `No_Helmet` detections create a helmet-violation flag; helmet classification and license-plate detection remain model outputs, not legal determinations.

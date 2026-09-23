@@ -1,13 +1,16 @@
 """
-YOLO11n ONNX object detection + SafeCityAI traffic violation heuristics.
+ONNX object detection for the SafeCityAI YOLOv5 traffic case study.
 
-Uses COCO-pretrained YOLO for vehicle/person/motorcycle detection, then applies
-traffic-rule heuristics (helmet/seatbelt proxies, triple-riding, density rules)
-so the product is fully functional end-to-end without a custom-trained weights file.
-Custom class fine-tuning notes are in /docs.
+Loads the configured ONNX detector. The checked-in fallback is a COCO-pretrained
+YOLO11 model; a trained YOLOv5 ONNX model can be selected with MODEL_PATH and
+CLASS_NAMES_PATH. Custom No_Helmet detections are reported directly, while the
+COCO fallback keeps its explicitly heuristic traffic flags.
 """
 from __future__ import annotations
 
+import math
+import shutil
+import subprocess
 import time
 import uuid
 from dataclasses import dataclass, asdict
@@ -82,16 +85,24 @@ class Det:
     violation_type: str | None = None
 
     def to_dict(self) -> dict:
+        box = {
+            "x1": round(self.x1, 1),
+            "y1": round(self.y1, 1),
+            "x2": round(self.x2, 1),
+            "y2": round(self.y2, 1),
+        }
         return {
             "class_id": self.class_id,
+            "class": self.class_name,
             "class_name": self.class_name,
             "confidence": round(self.confidence, 4),
-            "box": {
-                "x1": round(self.x1, 1),
-                "y1": round(self.y1, 1),
-                "x2": round(self.x2, 1),
-                "y2": round(self.y2, 1),
-            },
+            "box": box,
+            "box_xywh": [
+                round(self.x1, 1),
+                round(self.y1, 1),
+                round(self.x2 - self.x1, 1),
+                round(self.y2 - self.y1, 1),
+            ],
             "is_violation": self.is_violation,
             "violation_type": self.violation_type,
         }
@@ -101,16 +112,20 @@ class YOLODetector:
     def __init__(self) -> None:
         self.model_path = Path(settings.model_path)
         self.names = self._load_names()
+        self.custom_classes = len(self.names) != 80
         self.session: ort.InferenceSession | None = None
         self.input_name = "images"
         self.input_size = 640
         self._load()
 
     def _load_names(self) -> list[str]:
-        path = Path(settings.coco_names_path)
-        if path.exists():
-            return [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
-        return [f"class_{i}" for i in range(80)]
+        path = Path(settings.class_names_path)
+        if not path.is_file():
+            raise FileNotFoundError(f"Class names file not found: {path}")
+        names = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        if not names:
+            raise ValueError(f"Class names file is empty: {path}")
+        return names
 
     def _load(self) -> None:
         if not self.model_path.exists():
@@ -186,17 +201,31 @@ class YOLODetector:
         iou_thr: float,
     ) -> list[Det]:
         """
-        YOLOv8/v11 ONNX output is typically (1, 84, 8400) = (batch, 4+nc, anchors)
+        Supports raw YOLOv5 ONNX output (xywh, objectness, class scores) and
+        YOLOv8/11 output (xywh, class scores), in either common tensor orientation.
         """
         pred = output
         if pred.ndim == 3:
             pred = pred[0]
-        # shape could be (84, N) or (N, 84)
-        if pred.shape[0] < pred.shape[1] and pred.shape[0] <= 144:
-            pred = pred.T  # -> (N, 84)
+        if pred.ndim != 2:
+            raise ValueError(f"Unsupported ONNX detector output shape: {output.shape}")
+
+        nc = len(self.names)
+        output_widths = {4 + nc, 5 + nc}
+        if pred.shape[1] not in output_widths and pred.shape[0] in output_widths:
+            pred = pred.T
+        if pred.shape[1] == 5 + nc:
+            objectness = pred[:, 4]
+            cls_scores = pred[:, 5:] * objectness[:, None]
+        elif pred.shape[1] == 4 + nc:
+            cls_scores = pred[:, 4:]
+        else:
+            raise ValueError(
+                f"ONNX output has {pred.shape[1]} values per box, but class names define "
+                f"{nc} classes (expected {4 + nc} or {5 + nc}). Check MODEL_PATH and CLASS_NAMES_PATH."
+            )
 
         boxes_xywh = pred[:, :4]
-        cls_scores = pred[:, 4:]
         cls_ids = cls_scores.argmax(axis=1)
         confs = cls_scores.max(axis=1)
 
@@ -299,6 +328,24 @@ class YOLODetector:
         Apply traffic enforcement heuristics on top of COCO detections.
         Returns annotated dets + structured violation records.
         """
+        if self.custom_classes:
+            violations: list[dict[str, Any]] = []
+            for det in dets:
+                class_name = det.class_name.strip().lower().replace("-", "_").replace(" ", "_")
+                if class_name in {"no_helmet", "nohelmet"}:
+                    det.is_violation = True
+                    det.violation_type = "no_helmet"
+                    violations.append(
+                        self._vrec(
+                            "no_helmet",
+                            det.confidence,
+                            det,
+                            vehicle_class="motorcycle",
+                            extra={"detected_class": det.class_name},
+                        )
+                    )
+            return dets, self._dedupe_violations(violations)
+
         persons = [d for d in dets if d.class_id == PERSON]
         bikes = [d for d in dets if d.class_id in RIDER_VEHICLE_IDS]
         cars = [d for d in dets if d.class_id in (CAR, BUS, TRUCK)]
@@ -603,12 +650,36 @@ class YOLODetector:
         if not cap.isOpened():
             raise ValueError(f"Could not open video: {input_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPS) or 15
+        fps = float(cap.get(cv2.CAP_PROP_FPS))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if not math.isfinite(fps) or fps <= 0:
+            fps = 15.0
+        if w <= 0 or h <= 0:
+            cap.release()
+            raise ValueError("Video has invalid frame dimensions")
+        max_frames = int(max_frames)
+        skip = max(1, int(skip))
+        if max_frames <= 0:
+            cap.release()
+            raise ValueError("max_frames must be greater than zero")
+
+        # Sample across the entire clip. Previously this loop stopped after the
+        # first max_frames*skip source frames, silently ignoring the rest of a
+        # longer upload. Keep the output duration close to the source duration.
+        if total_frames > 0:
+            skip = max(skip, math.ceil(total_frames / max_frames))
+
+        # OpenCV's mp4v output is not supported by every browser. Render installs
+        # FFmpeg below and converts this intermediate into H.264 for playback.
+        raw_path = result_path.with_name(f"{result_path.stem}_opencv.mp4")
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(str(result_path), fourcc, max(1, fps / max(skip, 1)), (w, h))
+        writer = cv2.VideoWriter(str(raw_path), fourcc, max(0.1, fps / skip), (w, h))
+        if not writer.isOpened():
+            cap.release()
+            raise RuntimeError("Could not initialize the MP4 video encoder")
 
         all_dets: list[dict] = []
         all_violations: list[dict] = []
@@ -618,41 +689,86 @@ class YOLODetector:
         processed = 0
         last_annotated = None
 
-        while processed < max_frames:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if frame_i % skip != 0:
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if processed >= max_frames:
+                    break
+                if frame_i % skip != 0:
+                    frame_i += 1
+                    continue
+                dets, _ = self.detect_image(frame, conf_thr=conf_thr)
+                dets, violations = self.analyze_violations(dets)
+                annotated = self.draw(frame, dets, violations)
+                writer.write(annotated)
+                last_annotated = annotated
+                for d in dets:
+                    class_counts[d.class_name] = class_counts.get(d.class_name, 0) + 1
+                    all_dets.append(d.to_dict())
+                for v in violations:
+                    v = dict(v)
+                    v["frame"] = frame_i
+                    all_violations.append(v)
+                processed += 1
                 frame_i += 1
-                continue
-            dets, _ = self.detect_image(frame, conf_thr=conf_thr)
-            dets, violations = self.analyze_violations(dets)
-            annotated = self.draw(frame, dets, violations)
-            writer.write(annotated)
-            last_annotated = annotated
-            for d in dets:
-                class_counts[d.class_name] = class_counts.get(d.class_name, 0) + 1
-                all_dets.append(d.to_dict())
-            for v in violations:
-                v = dict(v)
-                v["frame"] = frame_i
-                all_violations.append(v)
-            processed += 1
-            frame_i += 1
+        finally:
+            cap.release()
+            writer.release()
 
-        cap.release()
-        writer.release()
+        if processed == 0 or not raw_path.exists() or raw_path.stat().st_size == 0:
+            raise ValueError("No frames could be decoded from the uploaded video")
+
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            completed = subprocess.run(
+                [
+                    ffmpeg,
+                    "-y",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    str(raw_path),
+                    "-an",
+                    "-vf",
+                    "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "28",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-movflags",
+                    "+faststart",
+                    str(result_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+                check=False,
+            )
+            if completed.returncode != 0:
+                raise RuntimeError(f"Could not encode browser-playable MP4: {completed.stderr[-1000:]}")
+            raw_path.unlink(missing_ok=True)
+        else:
+            raw_path.replace(result_path)
 
         # also save a snapshot jpeg of last frame
         snap_path = result_path.with_suffix(".jpg")
         if last_annotated is not None:
-            cv2.imwrite(str(snap_path), last_annotated)
+            if not cv2.imwrite(str(snap_path), last_annotated):
+                raise RuntimeError("Could not write the final video preview frame")
 
         ms = (time.perf_counter() - t0) * 1000.0
         # unique-ish violations by type
         uniq = self._dedupe_violations(all_violations)
         summary = {
             "frames_processed": processed,
+            "video_frames_total": total_frames or None,
+            "frame_sampling_interval": skip,
             "total_raw_detections": len(all_dets),
             "unique_violation_flags": len(uniq),
             "class_counts": class_counts,
@@ -680,11 +796,19 @@ class YOLODetector:
             "violation_count": len(violations),
             "class_counts": class_counts,
             "violations_by_type": v_by_type,
-            "vehicles": sum(1 for d in dets if d.class_id in VEHICLE_IDS),
-            "persons": sum(1 for d in dets if d.class_id == PERSON),
+            "vehicles": 0 if self.custom_classes else sum(1 for d in dets if d.class_id in VEHICLE_IDS),
+            "persons": 0 if self.custom_classes else sum(1 for d in dets if d.class_id == PERSON),
             "processing_ms": round(ms, 1),
-            "model": "yolo11n.onnx (COCO) + SafeCity heuristics",
+            "model": self.model_label,
         }
+
+    @property
+    def model_label(self) -> str:
+        if self.custom_classes:
+            if "yolov5" in self.model_path.stem.lower():
+                return f"YOLOv5 custom ONNX · {len(self.names)} classes"
+            return f"Custom ONNX · {len(self.names)} classes"
+        return "YOLO11n COCO ONNX fallback"
 
 
 # Singleton

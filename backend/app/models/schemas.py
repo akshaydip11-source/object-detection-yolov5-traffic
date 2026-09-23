@@ -43,9 +43,11 @@ class BBox(BaseModel):
 
 class Detection(BaseModel):
     class_id: int
+    class_label: str = Field(alias="class")
     class_name: str
     confidence: float
     box: BBox
+    box_xywh: list[float]
     is_violation: bool = False
     violation_type: Optional[str] = None
 
@@ -128,4 +130,6 @@ class HealthOut(BaseModel):
     app: str
     model_loaded: bool
     model_path: str
+    model_name: str
+    class_names: list[str]
     version: str = "1.0.0"
