@@ -6,6 +6,7 @@ ROOT_DIR = BASE_DIR.parent
 
 
 class Settings(BaseSettings):
+    app_env: str = "development"
     app_name: str = "SafeCityAI"
     app_tagline: str = "AI-Powered Traffic Rule Enforcement"
     secret_key: str = "safecity-ai-dev-secret-change-in-production-2026"

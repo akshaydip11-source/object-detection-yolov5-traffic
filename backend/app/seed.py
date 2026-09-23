@@ -33,24 +33,23 @@ def seed():
                 organization="SafeCityAI HQ",
             )
             db.add(admin)
-            officer = User(
-                email="officer@safecity.ai",
-                full_name="Traffic Officer Roy",
-                hashed_password=hash_password("officer123"),
-                role="officer",
-                organization="Kolkata Traffic Police",
-            )
-            db.add(officer)
-            analyst = User(
-                email="analyst@safecity.ai",
-                full_name="CV Analyst Mehta",
-                hashed_password=hash_password("analyst123"),
-                role="analyst",
-                organization="SafeCity Data Lab",
-            )
-            db.add(analyst)
+            if settings.app_env.lower() != "production":
+                db.add(User(
+                    email="officer@safecity.ai",
+                    full_name="Traffic Officer Roy",
+                    hashed_password=hash_password("officer123"),
+                    role="officer",
+                    organization="Kolkata Traffic Police",
+                ))
+                db.add(User(
+                    email="analyst@safecity.ai",
+                    full_name="CV Analyst Mehta",
+                    hashed_password=hash_password("analyst123"),
+                    role="analyst",
+                    organization="SafeCity Data Lab",
+                ))
             db.commit()
-            print("✓ Seeded users (admin@safecity.ai / admin123)")
+            print("✓ Seeded administrator account")
 
         if db.query(CameraZone).count() == 0:
             for i, (cid, name, loc, city, lat, lng) in enumerate(CAMERAS):

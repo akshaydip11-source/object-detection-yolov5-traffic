@@ -8,10 +8,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend ./backend
+COPY backend/weights ./backend/weights
 COPY frontend ./frontend
 COPY docs ./docs
 
 WORKDIR /app/backend
 ENV PYTHONPATH=.
 EXPOSE 8000
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --workers 1"]

@@ -38,11 +38,21 @@ Open `http://localhost:8000`.
 
 API docs: `http://localhost:8000/api/docs`
 
-## Demo accounts
+## Local demo accounts
 
 - `admin@safecity.ai` / `admin123`
 - `officer@safecity.ai` / `officer123`
 - `analyst@safecity.ai` / `analyst123`
+
+These demo credentials are seeded only in development mode. Render generates a separate administrator password for the production deployment, and new registrations receive the officer role.
+
+## Deploy on Render
+
+1. In Render, choose **New → Blueprint** and connect this GitHub repository.
+2. Render reads [`render.yaml`](render.yaml), builds the Docker image, and checks `/api/health`.
+3. After the first deploy, retrieve the generated `DEFAULT_ADMIN_PASSWORD` from the service environment settings and sign in as `admin@safecity.ai`. Keep that password private; the app does not currently provide password changes.
+
+The Blueprint uses a Free web service for demonstration. Its SQLite database and uploaded files use the local filesystem, which Render does not preserve on Free services. Do not use this setup for durable records. A production deployment needs persistent storage and a database configuration designed for PostgreSQL or another managed database.
 
 ## Custom YOLOv5 training
 

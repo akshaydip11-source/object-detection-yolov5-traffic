@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: safecityai
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: oregon
+    branch: main
+    healthCheckPath: /api/health
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEFAULT_ADMIN_PASSWORD
+        generateValue: true
+      - key: APP_ENV
+        value: production

@@ -22,7 +22,7 @@ from app.models.schemas import (
 )
 from app.services.auth import (
     authenticate_user, create_access_token, get_current_user,
-    get_current_user_optional, hash_password, require_admin,
+    hash_password, require_admin,
 )
 from app.services.detector import FINE_SCHEDULE, VIOLATION_LABELS, get_detector, new_job_id
 from app.services.reports import build_violation_ticket_pdf, violations_to_csv
@@ -67,6 +67,8 @@ def health():
         loaded = det.loaded
     except Exception:
         loaded = False
+    if not loaded:
+        raise HTTPException(status_code=503, detail="Detection model is unavailable")
     return HealthOut(
         status="ok",
         app=settings.app_name,
@@ -80,10 +82,9 @@ def health():
 def register(payload: UserCreate, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(400, "Email already registered")
-    role = payload.role if payload.role in ("admin", "officer", "analyst") else "officer"
-    # first user becomes admin
-    if db.query(User).count() == 0:
-        role = "admin"
+    # Public registration must never grant a requested privileged role.
+    # The first account on a fresh local database remains the initial admin.
+    role = "admin" if db.query(User).count() == 0 else "officer"
     user = User(
         email=payload.email.lower().strip(),
         full_name=payload.full_name.strip(),
@@ -121,7 +122,7 @@ async def detect_image(
     camera_id: str = Form("CAM-01"),
     location: str = Form("HQ Upload Desk"),
     create_tickets: bool = Form(True),
-    user: User | None = Depends(get_current_user_optional),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     suffix = Path(file.filename or "").suffix.lower()
@@ -205,7 +206,7 @@ async def detect_video(
     location: str = Form("HQ Upload Desk"),
     max_frames: int = Form(120),
     create_tickets: bool = Form(True),
-    user: User | None = Depends(get_current_user_optional),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     suffix = Path(file.filename or "").suffix.lower()
@@ -290,7 +291,7 @@ async def detect_frame(
     camera_id: str = Form("CAM-LIVE"),
     location: str = Form("Live Webcam"),
     create_tickets: bool = Form(False),
-    user: User | None = Depends(get_current_user_optional),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Single webcam/browser frame (jpeg/png) — optimized for live UI."""
@@ -340,7 +341,7 @@ def _create_violations_from_result(
 def list_jobs(
     limit: int = Query(30, le=100),
     db: Session = Depends(get_db),
-    user: User | None = Depends(get_current_user_optional),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(DetectionJob).order_by(DetectionJob.created_at.desc()).limit(limit)
     rows = q.all()
@@ -363,7 +364,7 @@ def list_jobs(
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: str, db: Session = Depends(get_db)):
+def get_job(job_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     j = db.query(DetectionJob).filter(DetectionJob.job_id == job_id).first()
     if not j:
         raise HTTPException(404, "Job not found")
@@ -394,6 +395,7 @@ def list_violations(
     limit: int = Query(50, le=200),
     offset: int = 0,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     q = db.query(Violation).order_by(Violation.created_at.desc())
     if status_filter:
@@ -407,7 +409,7 @@ def list_violations(
 
 
 @router.get("/violations/{ticket_id}", response_model=ViolationOut)
-def get_violation(ticket_id: str, db: Session = Depends(get_db)):
+def get_violation(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     v = db.query(Violation).filter(Violation.ticket_id == ticket_id).first()
     if not v:
         raise HTTPException(404, "Violation not found")
@@ -435,7 +437,11 @@ def update_violation(
 
 
 @router.get("/violations/{ticket_id}/pdf")
-def violation_pdf(ticket_id: str, db: Session = Depends(get_db)):
+def violation_pdf(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     v = db.query(Violation).filter(Violation.ticket_id == ticket_id).first()
     if not v:
         raise HTTPException(404, "Violation not found")
@@ -496,7 +502,7 @@ def export_csv(
 
 # ---------- Cameras ----------
 @router.get("/cameras", response_model=list[CameraOut])
-def list_cameras(db: Session = Depends(get_db)):
+def list_cameras(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     return db.query(CameraZone).order_by(CameraZone.camera_id).all()
 
 
@@ -513,7 +519,7 @@ def violation_types():
 
 # ---------- Dashboard ----------
 @router.get("/dashboard/stats", response_model=DashboardStats)
-def dashboard_stats(db: Session = Depends(get_db)):
+def dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     total_det = db.query(func.count(DetectionJob.id)).scalar() or 0
     total_viol = db.query(func.count(Violation.id)).scalar() or 0
     open_viol = db.query(func.count(Violation.id)).filter(Violation.status == "open").scalar() or 0
