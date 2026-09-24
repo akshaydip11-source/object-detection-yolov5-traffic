@@ -1,0 +1,18 @@
+{$SITE_ADDRESS:http://localhost} {
+    # Keep this just above MAX_UPLOAD_MB plus multipart overhead (default 50 MB).
+    request_body {
+        max_size 52MB
+    }
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy no-referrer
+        Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+        # Keep inline scripts/styles for this static UI; no inline handler attributes
+        # or eval are needed. Restrict third-party resources to the declared fonts.
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+        -Server
+    }
+    encode gzip
+    reverse_proxy app:8000
+    # Intentionally no access log: query parameters contain short-lived media links.
+}

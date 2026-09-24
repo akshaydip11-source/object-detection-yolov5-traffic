@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import Any, Optional
-from pydantic import BaseModel, EmailStr, Field
+from typing import Any, Optional, Literal
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class Token(BaseModel):
@@ -10,15 +10,21 @@ class Token(BaseModel):
 
 class UserCreate(BaseModel):
     email: EmailStr
-    full_name: str
-    password: str = Field(min_length=6)
-    organization: str = "SafeCity Traffic Unit"
-    role: str = "officer"
+    full_name: str = Field(min_length=1, max_length=255)
+    password: str = Field(min_length=8, max_length=72)
+    organization: str = Field("SafeCity Traffic Unit", max_length=255)
+
+    @field_validator("password")
+    @classmethod
+    def password_bytes(cls, value):
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
 
 
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(max_length=72)
 
 
 class UserOut(BaseModel):
@@ -30,8 +36,7 @@ class UserOut(BaseModel):
     is_active: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class BBox(BaseModel):
@@ -43,11 +48,9 @@ class BBox(BaseModel):
 
 class Detection(BaseModel):
     class_id: int
-    class_label: str = Field(alias="class")
     class_name: str
     confidence: float
     box: BBox
-    box_xywh: list[float]
     is_violation: bool = False
     violation_type: Optional[str] = None
 
@@ -67,6 +70,20 @@ class DetectResponse(BaseModel):
     created_at: datetime
 
 
+class BriefDetection(BaseModel):
+    class_name: Literal["Helmet", "No_Helmet", "License_Plate"] = Field(alias="class")
+    confidence: float
+    box: list[float] = Field(min_length=4, max_length=4)
+
+
+class BriefDetectResponse(BaseModel):
+    job_id: str
+    detections: list[BriefDetection]
+    box_format: Literal["xywh"] = "xywh"
+    coordinate_system: Literal["image_pixels"] = "image_pixels"
+    annotated_image_url: str | None = None
+
+
 class ViolationOut(BaseModel):
     id: int
     ticket_id: str
@@ -80,19 +97,17 @@ class ViolationOut(BaseModel):
     status: str
     fine_amount: float
     notes: Optional[str]
-    snapshot_path: Optional[str]
     created_at: datetime
     bbox_json: Optional[dict] = None
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class ViolationUpdate(BaseModel):
-    status: Optional[str] = None
-    notes: Optional[str] = None
-    fine_amount: Optional[float] = None
-    plate_text: Optional[str] = None
+    status: Optional[Literal["open", "reviewed", "issued", "dismissed", "paid"]] = None
+    notes: Optional[str] = Field(None, max_length=2000)
+    fine_amount: Optional[float] = Field(None, ge=0, allow_inf_nan=False)
+    plate_text: Optional[str] = Field(None, max_length=32)
 
 
 class CameraOut(BaseModel):
@@ -106,8 +121,7 @@ class CameraOut(BaseModel):
     status: str
     violation_count: int
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
 
 
 class DashboardStats(BaseModel):
@@ -130,6 +144,9 @@ class HealthOut(BaseModel):
     app: str
     model_loaded: bool
     model_path: str
-    model_name: str
-    class_names: list[str]
+    model_name: str = "Custom YOLOv5"
+    model_status: Literal["available", "missing_model", "load_error"] = "missing_model"
+    message: str = ""
+    class_names: list[str] = Field(default_factory=list)
+    max_upload_mb: int = 50
     version: str = "1.0.0"

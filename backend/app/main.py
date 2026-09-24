@@ -2,23 +2,71 @@
 SafeCityAI — FastAPI application
 AI-powered traffic rule enforcement platform.
 """
-from pathlib import Path
 
-from fastapi import FastAPI, Request
+from contextlib import asynccontextmanager
+import logging
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 
-from app.api.routes import router
-from app.config import settings
-from app.db.database import Base, engine
-from app.seed import seed
-from app.services.detector import get_detector
+from backend.app.api.routes import router
+from backend.app.config import ROOT_DIR, settings
+from backend.app.db.database import Base, engine
+from backend.app.seed import seed
+from backend.app.services.detector import get_detector
+from backend.app.services.checkpoint import provision_checkpoint
+from backend.app.services.media import router as media_router
+from backend.app.security import RequestGuards
 
-FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
+FRONTEND_DIR = ROOT_DIR / "frontend"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    seed()
+    if settings.environment == "production":
+        from backend.app.db.database import SessionLocal
+        from backend.app.db.models import User
+
+        with SessionLocal() as db:
+            if (
+                db.query(User)
+                .filter(
+                    User.email.in_(
+                        [
+                            "admin@safecity.ai",
+                            "officer@safecity.ai",
+                            "analyst@safecity.ai",
+                        ]
+                    )
+                )
+                .first()
+            ):
+                raise RuntimeError(
+                    "Remove public demo accounts before starting in production"
+                )
+    try:
+        provision_checkpoint(
+            settings.model_path,
+            settings.model_url.get_secret_value() if settings.model_url else None,
+            settings.model_sha256,
+        )
+        get_detector()
+    except Exception:
+        if settings.environment == "production":
+            raise
+        logging.getLogger(__name__).warning(
+            "Custom model unavailable; detection will return 503", exc_info=True
+        )
+    yield
+
 
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.app_name,
     description=settings.app_tagline,
     version="1.0.0",
@@ -30,29 +78,15 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=800)
+app.add_middleware(RequestGuards)
 
 app.include_router(router, prefix="/api")
-
-# Uploaded / result media
-settings.upload_dir.mkdir(parents=True, exist_ok=True)
-app.mount("/media", StaticFiles(directory=str(settings.upload_dir)), name="media")
-
-
-@app.on_event("startup")
-def on_startup():
-    Base.metadata.create_all(bind=engine)
-    seed()
-    try:
-        det = get_detector()
-        print(f"✓ YOLO model loaded: {det.model_path} (input={det.input_size})")
-    except Exception as e:
-        print(f"⚠ Model load deferred/failed: {e}")
-
+app.include_router(media_router, prefix="/api")
 
 # ---- Frontend static SPA-ish multi-page ----
 if FRONTEND_DIR.exists():
@@ -104,7 +138,9 @@ if FRONTEND_DIR.exists():
 
     @app.get("/app.js")
     async def app_js():
-        return FileResponse(FRONTEND_DIR / "app.js", media_type="application/javascript")
+        return FileResponse(
+            FRONTEND_DIR / "app.js", media_type="application/javascript"
+        )
 
 
 @app.get("/api")

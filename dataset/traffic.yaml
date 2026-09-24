@@ -5,5 +5,5 @@ val: images/val
 
 names:
   0: Helmet
-  1: No_Helmet
-  2: License_Plate
+  1: NoHelmet
+  2: LicensePlate

@@ -1,31 +1,51 @@
 from __future__ import annotations
 
-import shutil
 import uuid
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
-from fastapi import (
-    APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-)
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import Response, JSONResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.db.database import get_db
-from app.db.models import AuditLog, CameraZone, DetectionJob, User, Violation
-from app.models.schemas import (
-    CameraOut, DashboardStats, DetectResponse, Detection, Token,
-    UserCreate, UserLogin, UserOut, ViolationOut, ViolationUpdate, HealthOut,
+from backend.app.config import settings
+from backend.app.db.database import get_db
+from backend.app.db.models import AuditLog, CameraZone, DetectionJob, User, Violation
+from backend.app.models.schemas import (
+    BriefDetection,
+    BriefDetectResponse,
+    CameraOut,
+    DashboardStats,
+    DetectResponse,
+    Detection,
+    Token,
+    UserCreate,
+    UserLogin,
+    UserOut,
+    ViolationOut,
+    ViolationUpdate,
+    HealthOut,
 )
-from app.services.auth import (
-    authenticate_user, create_access_token, get_current_user,
-    hash_password, require_admin,
+from backend.app.services.auth import (
+    authenticate_user,
+    create_access_token,
+    get_current_user,
+    hash_password,
+    require_admin,
+    require_officer,
 )
-from app.services.detector import FINE_SCHEDULE, VIOLATION_LABELS, get_detector, new_job_id
-from app.services.reports import build_violation_ticket_pdf, violations_to_csv
+from backend.app.services.detector import (
+    FINE_SCHEDULE,
+    VIOLATION_LABELS,
+    get_detector,
+    new_job_id,
+)
+from backend.app.services.media import media_url
+from backend.app.security import inference_slot
+from backend.app.services.reports import build_violation_ticket_pdf, violations_to_csv
 
 router = APIRouter()
 
@@ -38,57 +58,106 @@ def _audit(db: Session, user_id: int | None, action: str, detail: str = "") -> N
     db.commit()
 
 
-def _save_upload(file: UploadFile, subdir: str) -> tuple[Path, str]:
-    suffix = Path(file.filename or "upload.bin").suffix.lower()
-    name = f"{uuid.uuid4().hex}{suffix}"
-    dest = settings.upload_dir / subdir / name
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with dest.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
-    return dest, file.filename or name
-
-
-def _public_url(path: str | Path | None) -> str | None:
-    if not path:
-        return None
-    p = Path(path)
+def _save_upload(file: UploadFile, subdir: str, job_id: str) -> Path:
+    """Bounded disk copy; never read an entire video into RAM."""
+    suffix = Path(file.filename or "").suffix.lower()
+    dest = settings.upload_dir / subdir / f"{job_id}{suffix}"
+    size = 0
     try:
-        rel = p.relative_to(settings.upload_dir)
-        return f"/media/{rel.as_posix()}"
+        with dest.open("wb") as output:
+            while chunk := file.file.read(1024 * 1024):
+                size += len(chunk)
+                if size > settings.max_upload_mb * 1024 * 1024:
+                    raise HTTPException(
+                        413, f"File too large (max {settings.max_upload_mb}MB)"
+                    )
+                output.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "Empty upload")
     except Exception:
-        return f"/media/{p.name}"
+        dest.unlink(missing_ok=True)
+        raise
+    finally:
+        file.file.close()
+    return dest
+
+
+def _ready_detector():
+    try:
+        return get_detector()
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Custom YOLOv5 load failed")
+        raise HTTPException(
+            503,
+            "Custom YOLOv5 model unavailable. Check models/best.pt and server logs.",
+        ) from exc
 
 
 # ---------- Health ----------
 @router.get("/health", response_model=HealthOut)
 def health():
+    """Readiness details; loading a checkpoint does not certify its training/accuracy."""
+    names = []
     try:
         det = get_detector()
         loaded = det.loaded
+        raw_names = getattr(det, "names", {})
+        names = (
+            list(raw_names.values()) if isinstance(raw_names, dict) else list(raw_names)
+        )
+        model_status = "available" if loaded else "load_error"
+        message = (
+            "Custom checkpoint loaded. Accuracy must be validated separately."
+            if loaded
+            else "Checkpoint failed to load. Check server logs."
+        )
+    except FileNotFoundError:
+        loaded, model_status = False, "missing_model"
+        message = "Custom checkpoint unavailable. Supply trusted models/best.pt (or MODEL_PATH), then restart. Training cannot be inferred from a missing file."
     except Exception:
-        loaded = False
-    if not loaded:
-        raise HTTPException(status_code=503, detail="Detection model is unavailable")
+        loaded, model_status = False, "load_error"
+        message = "Checkpoint could not be loaded. Verify checkpoint integrity, YOLOv5 compatibility and class metadata; check server logs."
     return HealthOut(
-        status="ok",
+        status="ok" if loaded else "degraded",
         app=settings.app_name,
         model_loaded=loaded,
-        model_path=str(settings.model_path),
-        model_name=det.model_label,
-        class_names=det.names,
+        model_path=settings.model_path.name,
+        model_status=model_status,
+        message=message,
+        class_names=names,
+        max_upload_mb=settings.max_upload_mb,
+    )
+
+
+@router.get("/ready", response_model=HealthOut)
+def readiness():
+    result = health()
+    return JSONResponse(
+        result.model_dump(), status_code=200 if result.model_loaded else 503
     )
 
 
 # ---------- Auth ----------
+@router.get("/auth/options")
+def auth_options():
+    return {
+        "registration_enabled": settings.registration_enabled,
+        "demo_mode": settings.demo_mode,
+    }
+
+
 @router.post("/auth/register", response_model=UserOut)
 def register(payload: UserCreate, db: Session = Depends(get_db)):
-    if db.query(User).filter(User.email == payload.email).first():
+    if not settings.registration_enabled:
+        raise HTTPException(
+            403, "Registration disabled; ask the administrator for an account"
+        )
+    email = payload.email.lower().strip()
+    if db.query(User).filter(User.email == email).first():
         raise HTTPException(400, "Email already registered")
-    # Public registration must never grant a requested privileged role.
-    # The first account on a fresh local database remains the initial admin.
-    role = "admin" if db.query(User).count() == 0 else "officer"
+    role = "analyst"  # Public registration never grants officer/admin privileges.
     user = User(
-        email=payload.email.lower().strip(),
+        email=email,
         full_name=payload.full_name.strip(),
         hashed_password=hash_password(payload.password),
         role=role,
@@ -117,27 +186,33 @@ def me(user: User = Depends(get_current_user)):
 
 
 # ---------- Detection ----------
-@router.post("/detect/image", response_model=DetectResponse)
-async def detect_image(
+@router.post(
+    "/detect/image",
+    response_model=DetectResponse,
+    dependencies=[Depends(inference_slot)],
+)
+def detect_image(
     file: UploadFile = File(...),
-    conf_threshold: float = Form(0.35),
-    camera_id: str = Form("CAM-01"),
-    location: str = Form("HQ Upload Desk"),
-    create_tickets: bool = Form(True),
+    conf_threshold: float = Form(0.35, ge=0, le=1),
+    camera_id: str = Form("CAM-01", max_length=64),
+    location: str = Form("HQ Upload Desk", max_length=255),
+    create_tickets: bool = Form(False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_IMAGE:
-        raise HTTPException(400, f"Unsupported image type. Allowed: {sorted(ALLOWED_IMAGE)}")
+        raise HTTPException(
+            400, f"Unsupported image type. Allowed: {sorted(ALLOWED_IMAGE)}"
+        )
 
-    # size guard
-    data = await file.read()
-    if len(data) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(400, f"File too large (max {settings.max_upload_mb}MB)")
+    if create_tickets and (user is None or user.role not in {"admin", "officer"}):
+        raise HTTPException(
+            403, "An officer or admin must sign in to create review tickets"
+        )
+    detector = _ready_detector()
     job_id = new_job_id()
-    in_path = settings.upload_dir / "images" / f"{job_id}{suffix}"
-    in_path.write_bytes(data)
+    in_path = _save_upload(file, "images", job_id)
     out_path = settings.upload_dir / "results" / f"{job_id}_annotated.jpg"
 
     job = DetectionJob(
@@ -154,7 +229,6 @@ async def detect_image(
     db.refresh(job)
 
     try:
-        detector = get_detector()
         result = detector.process_image_file(in_path, out_path, conf_thr=conf_threshold)
         job.status = "done"
         job.result_path = result["result_path"]
@@ -173,7 +247,7 @@ async def detect_image(
 
         # bump camera count
         cam = db.query(CameraZone).filter(CameraZone.camera_id == camera_id).first()
-        if cam:
+        if cam and create_tickets:
             cam.violation_count += len(result["violations"])
             db.commit()
 
@@ -188,40 +262,88 @@ async def detect_image(
             processing_ms=job.processing_ms,
             detections=[Detection(**d) for d in result["detections"]],
             summary=result["summary"],
-            result_url=_public_url(out_path),
+            result_url=media_url(out_path, user),
             original_filename=job.original_filename,
             conf_threshold=conf_threshold,
             created_at=job.created_at,
         )
     except Exception as e:
+        logging.getLogger(__name__).exception("Detection job %s failed", job_id)
+        db.rollback()
         job.status = "failed"
         job.error_message = str(e)
         db.commit()
-        raise HTTPException(500, f"Detection failed: {e}") from e
+        raise HTTPException(
+            400 if isinstance(e, ValueError) else 500,
+            "Invalid image"
+            if isinstance(e, ValueError)
+            else "Detection failed; check server logs",
+        ) from e
 
 
-@router.post("/detect/video", response_model=DetectResponse)
-async def detect_video(
+@router.post(
+    "/detect/predict",
+    response_model=BriefDetectResponse,
+    dependencies=[Depends(inference_slot)],
+)
+def predict_for_case_study(
     file: UploadFile = File(...),
-    conf_threshold: float = Form(0.35),
-    camera_id: str = Form("CAM-01"),
-    location: str = Form("HQ Upload Desk"),
-    max_frames: int = Form(120),
-    create_tickets: bool = Form(True),
+    conf_threshold: float = Form(0.50, ge=0, le=1),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Brief-compatible JSON. Box means [left, top, width, height] in pixels.
+
+    Reuse the authenticated, bounded image pipeline; never create tickets here.
+    Keep /detect/image's corner-coordinate contract unchanged for the web console.
+    """
+    result = detect_image(
+        file=file, conf_threshold=conf_threshold, camera_id="CASE-STUDY",
+        location="Case-study image upload", create_tickets=False, user=user, db=db,
+    )
+    names = {"helmet": "Helmet", "nohelmet": "No_Helmet", "licenseplate": "License_Plate"}
+    items = []
+    for det in result.detections:
+        key = "".join(c for c in det.class_name.lower() if c.isalnum())
+        box = det.box
+        items.append(BriefDetection(**{
+            "class": names[key], "confidence": det.confidence,
+            "box": [box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1],
+        }))
+    return BriefDetectResponse(
+        job_id=result.job_id, detections=items, annotated_image_url=result.result_url,
+    )
+
+
+@router.post(
+    "/detect/video",
+    response_model=DetectResponse,
+    dependencies=[Depends(inference_slot)],
+)
+def detect_video(
+    file: UploadFile = File(...),
+    conf_threshold: float = Form(0.35, ge=0, le=1),
+    camera_id: str = Form("CAM-01", max_length=64),
+    location: str = Form("HQ Upload Desk", max_length=255),
+    max_frames: int = Form(120, ge=1, le=300),
+    create_tickets: bool = Form(False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_VIDEO:
-        raise HTTPException(400, f"Unsupported video type. Allowed: {sorted(ALLOWED_VIDEO)}")
+        raise HTTPException(
+            400, f"Unsupported video type. Allowed: {sorted(ALLOWED_VIDEO)}"
+        )
 
-    data = await file.read()
-    if len(data) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(400, f"File too large (max {settings.max_upload_mb}MB)")
-
+    if create_tickets:
+        raise HTTPException(
+            400,
+            "Video ticket creation is disabled: frame observations are not unique offences",
+        )
+    detector = _ready_detector()
     job_id = new_job_id()
-    in_path = settings.upload_dir / "videos" / f"{job_id}{suffix}"
-    in_path.write_bytes(data)
+    in_path = _save_upload(file, "videos", job_id)
     out_path = settings.upload_dir / "results" / f"{job_id}_annotated.mp4"
 
     job = DetectionJob(
@@ -238,14 +360,17 @@ async def detect_video(
     db.refresh(job)
 
     try:
-        detector = get_detector()
         result = detector.process_video_file(
-            in_path, out_path, conf_thr=conf_threshold, max_frames=min(max_frames, 300), skip=2
+            in_path,
+            out_path,
+            conf_thr=conf_threshold,
+            max_frames=min(max_frames, 300),
+            skip=2,
         )
         job.status = "done"
         job.result_path = result["result_path"]
         job.object_count = result["summary"].get("total_raw_detections", 0)
-        job.violation_count = result["summary"].get("unique_violation_flags", 0)
+        job.violation_count = result["summary"].get("violation_observations", 0)
         job.processing_ms = result["processing_ms"]
         job.detections_json = {"items": result["detections"]}
         job.summary_json = result["summary"]
@@ -257,7 +382,7 @@ async def detect_video(
                 db, job, result["violations"], camera_id, location, user
             )
         cam = db.query(CameraZone).filter(CameraZone.camera_id == camera_id).first()
-        if cam:
+        if cam and create_tickets:
             cam.violation_count += len(result["violations"])
             db.commit()
 
@@ -273,31 +398,42 @@ async def detect_video(
             violation_count=job.violation_count,
             processing_ms=job.processing_ms,
             detections=[Detection(**d) for d in result["detections"][:100]],
-            summary={**result["summary"], "video_url": _public_url(out_path)},
-            result_url=_public_url(snap or out_path),
+            summary={**result["summary"], "video_url": media_url(out_path, user)},
+            result_url=media_url(snap or out_path, user),
             original_filename=job.original_filename,
             conf_threshold=conf_threshold,
             created_at=job.created_at,
         )
     except Exception as e:
+        logging.getLogger(__name__).exception("Detection job %s failed", job_id)
+        db.rollback()
         job.status = "failed"
         job.error_message = str(e)
         db.commit()
-        raise HTTPException(500, f"Video detection failed: {e}") from e
+        raise HTTPException(
+            400 if isinstance(e, ValueError) else 500,
+            "Invalid video"
+            if isinstance(e, ValueError)
+            else "Video detection failed; check server logs",
+        ) from e
 
 
-@router.post("/detect/frame", response_model=DetectResponse)
-async def detect_frame(
+@router.post(
+    "/detect/frame",
+    response_model=DetectResponse,
+    dependencies=[Depends(inference_slot)],
+)
+def detect_frame(
     file: UploadFile = File(...),
-    conf_threshold: float = Form(0.35),
-    camera_id: str = Form("CAM-LIVE"),
-    location: str = Form("Live Webcam"),
+    conf_threshold: float = Form(0.35, ge=0, le=1),
+    camera_id: str = Form("CAM-LIVE", max_length=64),
+    location: str = Form("Live Webcam", max_length=255),
     create_tickets: bool = Form(False),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Single webcam/browser frame (jpeg/png) — optimized for live UI."""
-    return await detect_image(
+    return detect_image(
         file=file,
         conf_threshold=conf_threshold,
         camera_id=camera_id,
@@ -317,7 +453,9 @@ def _create_violations_from_result(
     user: User | None,
 ) -> None:
     for v in violations:
-        ticket = f"SC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        ticket = (
+            f"SC-{datetime.utcnow().strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+        )
         row = Violation(
             ticket_id=ticket,
             job_id=job.id,
@@ -332,20 +470,35 @@ def _create_violations_from_result(
             bbox_json=v.get("bbox"),
             snapshot_path=job.result_path,
             status="open",
-            fine_amount=float(v.get("fine_amount", FINE_SCHEDULE.get(v["violation_type"], 500))),
+            fine_amount=float(
+                v.get("fine_amount", FINE_SCHEDULE.get(v["violation_type"], 500))
+            ),
             notes=VIOLATION_LABELS.get(v["violation_type"], ""),
         )
         db.add(row)
     db.commit()
 
 
+def _job_media(job: DetectionJob, user: User) -> dict:
+    summary = dict(job.summary_json or {})
+    result_path = job.result_path
+    if job.source_type == "video" and result_path:
+        summary["video_url"] = media_url(result_path, user)
+        snapshot = Path(result_path).with_suffix(".jpg")
+        result_path = str(snapshot) if snapshot.is_file() else None
+    return {"result_url": media_url(result_path, user), "summary": summary}
+
+
 @router.get("/jobs")
 def list_jobs(
-    limit: int = Query(30, le=100),
+    limit: int = Query(30, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    q = db.query(DetectionJob).order_by(DetectionJob.created_at.desc()).limit(limit)
+    q = db.query(DetectionJob)
+    if user.role not in {"admin", "officer"}:
+        q = q.filter(DetectionJob.user_id == user.id)
+    q = q.order_by(DetectionJob.created_at.desc()).limit(limit)
     rows = q.all()
     return [
         {
@@ -356,8 +509,7 @@ def list_jobs(
             "object_count": j.object_count,
             "violation_count": j.violation_count,
             "processing_ms": j.processing_ms,
-            "result_url": _public_url(j.result_path),
-            "summary": j.summary_json,
+            **_job_media(j, user),
             "created_at": j.created_at.isoformat() if j.created_at else None,
             "conf_threshold": j.conf_threshold,
         }
@@ -366,9 +518,11 @@ def list_jobs(
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def get_job(
+    job_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
     j = db.query(DetectionJob).filter(DetectionJob.job_id == job_id).first()
-    if not j:
+    if not j or (user.role not in {"admin", "officer"} and j.user_id != user.id):
         raise HTTPException(404, "Job not found")
     return {
         "job_id": j.job_id,
@@ -379,9 +533,10 @@ def get_job(job_id: str, db: Session = Depends(get_db), user: User = Depends(get
         "violation_count": j.violation_count,
         "processing_ms": j.processing_ms,
         "detections": (j.detections_json or {}).get("items", []),
-        "summary": j.summary_json,
-        "result_url": _public_url(j.result_path),
-        "error_message": j.error_message,
+        **_job_media(j, user),
+        "error_message": "Processing failed; contact the administrator"
+        if j.error_message
+        else None,
         "created_at": j.created_at.isoformat() if j.created_at else None,
         "completed_at": j.completed_at.isoformat() if j.completed_at else None,
         "conf_threshold": j.conf_threshold,
@@ -394,10 +549,10 @@ def list_violations(
     status_filter: Optional[str] = Query(None, alias="status"),
     violation_type: Optional[str] = None,
     severity: Optional[str] = None,
-    limit: int = Query(50, le=200),
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user: User = Depends(require_officer),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
     q = db.query(Violation).order_by(Violation.created_at.desc())
     if status_filter:
@@ -411,7 +566,9 @@ def list_violations(
 
 
 @router.get("/violations/{ticket_id}", response_model=ViolationOut)
-def get_violation(ticket_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def get_violation(
+    ticket_id: str, db: Session = Depends(get_db), user: User = Depends(require_officer)
+):
     v = db.query(Violation).filter(Violation.ticket_id == ticket_id).first()
     if not v:
         raise HTTPException(404, "Violation not found")
@@ -422,13 +579,15 @@ def get_violation(ticket_id: str, db: Session = Depends(get_db), user: User = De
 def update_violation(
     ticket_id: str,
     payload: ViolationUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_officer),
     db: Session = Depends(get_db),
 ):
     v = db.query(Violation).filter(Violation.ticket_id == ticket_id).first()
     if not v:
         raise HTTPException(404, "Violation not found")
-    data = payload.model_dump(exclude_unset=True)
+    if user.role not in {"admin", "officer"}:
+        raise HTTPException(403, "Officer or admin required")
+    data = payload.model_dump(exclude_unset=True, exclude_none=True)
     for k, val in data.items():
         setattr(v, k, val)
     v.updated_at = datetime.utcnow()
@@ -440,9 +599,7 @@ def update_violation(
 
 @router.get("/violations/{ticket_id}/pdf")
 def violation_pdf(
-    ticket_id: str,
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    ticket_id: str, db: Session = Depends(get_db), user: User = Depends(require_officer)
 ):
     v = db.query(Violation).filter(Violation.ticket_id == ticket_id).first()
     if not v:
@@ -473,7 +630,7 @@ def violation_pdf(
 @router.get("/export/violations.csv")
 def export_csv(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_officer),
 ):
     rows = db.query(Violation).order_by(Violation.created_at.desc()).limit(2000).all()
     data = [
@@ -498,7 +655,9 @@ def export_csv(
     return Response(
         content=csv_text,
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="safecity_violations.csv"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="safecity_violations.csv"'
+        },
     )
 
 
@@ -509,7 +668,7 @@ def list_cameras(db: Session = Depends(get_db), user: User = Depends(get_current
 
 
 @router.get("/meta/violation-types")
-def violation_types():
+def violation_types(user: User = Depends(get_current_user)):
     return {
         "types": [
             {"id": k, "label": VIOLATION_LABELS[k], "fine": FINE_SCHEDULE.get(k, 0)}
@@ -521,10 +680,15 @@ def violation_types():
 
 # ---------- Dashboard ----------
 @router.get("/dashboard/stats", response_model=DashboardStats)
-def dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+def dashboard_stats(
+    db: Session = Depends(get_db), user: User = Depends(require_officer)
+):
     total_det = db.query(func.count(DetectionJob.id)).scalar() or 0
     total_viol = db.query(func.count(Violation.id)).scalar() or 0
-    open_viol = db.query(func.count(Violation.id)).filter(Violation.status == "open").scalar() or 0
+    open_viol = (
+        db.query(func.count(Violation.id)).filter(Violation.status == "open").scalar()
+        or 0
+    )
     issued = (
         db.query(func.count(Violation.id))
         .filter(Violation.status.in_(["issued", "paid"]))
@@ -533,9 +697,16 @@ def dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_curr
     )
     cams_total = db.query(func.count(CameraZone.id)).scalar() or 0
     cams_online = (
-        db.query(func.count(CameraZone.id)).filter(CameraZone.status == "online").scalar() or 0
+        db.query(func.count(CameraZone.id))
+        .filter(CameraZone.status == "online")
+        .scalar()
+        or 0
     )
-    avg_ms = db.query(func.avg(DetectionJob.processing_ms)).filter(DetectionJob.status == "done").scalar()
+    avg_ms = (
+        db.query(func.avg(DetectionJob.processing_ms))
+        .filter(DetectionJob.status == "done")
+        .scalar()
+    )
     avg_ms = float(avg_ms or 0)
 
     # by type
@@ -553,12 +724,7 @@ def dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_curr
     )
     by_sev = {s: c for s, c in sev_rows}
 
-    recent = (
-        db.query(Violation)
-        .order_by(Violation.created_at.desc())
-        .limit(8)
-        .all()
-    )
+    recent = db.query(Violation).order_by(Violation.created_at.desc()).limit(8).all()
     recent_activity = [
         {
             "ticket_id": r.ticket_id,
@@ -593,10 +759,7 @@ def dashboard_stats(db: Session = Depends(get_db), user: User = Depends(get_curr
         daily_trend.append({"date": day.isoformat(), "violations": c, "detections": d})
 
     top_cams = (
-        db.query(CameraZone)
-        .order_by(CameraZone.violation_count.desc())
-        .limit(5)
-        .all()
+        db.query(CameraZone).order_by(CameraZone.violation_count.desc()).limit(5).all()
     )
     top_cameras = [
         {

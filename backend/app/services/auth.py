@@ -7,21 +7,23 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
-from app.config import settings
-from app.db.database import get_db
-from app.db.models import User
+from backend.app.config import settings
+from backend.app.db.database import get_db
+from backend.app.db.models import User
 
 security = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
-    pw = password.encode("utf-8")[:72]
+    pw = password.encode("utf-8")
+    if len(pw) > 72:
+        raise ValueError("Password exceeds bcrypt limit")
     return bcrypt.hashpw(pw, bcrypt.gensalt(rounds=12)).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(plain.encode("utf-8")[:72], hashed.encode("utf-8"))
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
 
@@ -31,7 +33,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     expire = datetime.utcnow() + (
         expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
     )
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "purpose": "access"})
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
 
 
@@ -41,7 +43,11 @@ def get_user_by_email(db: Session, email: str) -> User | None:
 
 def authenticate_user(db: Session, email: str, password: str) -> User | None:
     user = get_user_by_email(db, email)
-    if not user or not verify_password(password, user.hashed_password):
+    if (
+        not user
+        or not user.is_active
+        or not verify_password(password, user.hashed_password)
+    ):
         return None
     return user
 
@@ -51,12 +57,16 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     if creds is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated"
+        )
     token = creds.credentials
     try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = jwt.decode(
+            token, settings.secret_key, algorithms=[settings.algorithm]
+        )
         email: str | None = payload.get("sub")
-        if email is None:
+        if email is None or payload.get("purpose") != "access":
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
@@ -72,13 +82,16 @@ def get_current_user_optional(
 ) -> User | None:
     if creds is None:
         return None
-    try:
-        return get_current_user(creds, db)
-    except HTTPException:
-        return None
+    return get_current_user(creds, db)
 
 
 def require_admin(user: User = Depends(get_current_user)) -> User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin only")
+    return user
+
+
+def require_officer(user: User = Depends(get_current_user)) -> User:
+    if user.role not in {"admin", "officer"}:
+        raise HTTPException(status_code=403, detail="Officer or admin required")
     return user

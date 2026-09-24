@@ -27,21 +27,31 @@
         </div>
         <div class="field">
           <label>Password</label>
-          <input id="password" type="password" required placeholder="••••••••" autocomplete="current-password" minlength="6" />
+          <input id="password" type="password" required placeholder="••••••••" autocomplete="current-password" minlength="8" maxlength="72" />
         </div>
         <button class="btn btn-primary" type="submit" id="submitBtn">Sign in</button>
       </form>
 
-      <div class="auth-alt">
+      <div class="auth-alt" id="registrationControls" hidden>
         <span id="toggleText">No account?</span>
         <a href="#" id="toggleMode">Create one</a>
       </div>
 
+      <div class="demo-creds" id="demoCredentials" hidden>
+        Demo accounts (only with DEMO_MODE=true)<br/>
+        admin@safecity.ai / admin123<br/>
+        officer@safecity.ai / officer123<br/>
+        analyst@safecity.ai / analyst123
+      </div>
     </div>
   </div>
   <script src="/app.js"></script>
   <script>
     let mode = "login";
+    SafeCity.api("/auth/options").then(options => {
+      document.getElementById("registrationControls").hidden = !options.registration_enabled;
+      document.getElementById("demoCredentials").hidden = !options.demo_mode;
+    }).catch(() => SafeCity.toast("Cannot reach the API", "err"));
     const form = document.getElementById("form");
     document.getElementById("toggleMode").addEventListener("click", (e) => {
       e.preventDefault();
@@ -49,7 +59,7 @@
       document.getElementById("title").textContent = mode === "login" ? "Officer sign in" : "Create account";
       document.getElementById("sub").textContent = mode === "login"
         ? "Access the control room, tickets, and exports."
-        : "Register as a traffic officer or analyst.";
+        : "Register as an analyst. Officer/admin access is not self-service.";
       document.getElementById("submitBtn").textContent = mode === "login" ? "Sign in" : "Register";
       document.getElementById("toggleText").textContent = mode === "login" ? "No account?" : "Have an account?";
       document.getElementById("toggleMode").textContent = mode === "login" ? "Create one" : "Sign in";
@@ -70,7 +80,6 @@
               email,
               password,
               full_name: document.getElementById("full_name").value || email.split("@")[0],
-              role: "officer",
             }),
           });
           SafeCity.toast("Account created — signing in…");
@@ -83,7 +92,7 @@
         const me = await SafeCity.api("/auth/me");
         SafeCity.setAuth(tok.access_token, me);
         SafeCity.toast("Welcome, " + (me.full_name || me.email));
-        location.href = "/dashboard";
+        location.href = "/app";
       } catch (err) {
         SafeCity.toast(err.message || String(err), "err");
       } finally {

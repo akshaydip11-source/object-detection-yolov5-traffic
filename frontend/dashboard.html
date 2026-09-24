@@ -110,7 +110,7 @@
       const maxS = Math.max(1, ...Object.values(sevs), 1);
       document.getElementById("sevBars").innerHTML = Object.entries(sevs).map(([k,v]) => `
         <div class="bar-row">
-          <span>${k}</span>
+          <span>${SafeCity.escape(k)}</span>
           <div class="bar-track"><div class="bar-fill" style="width:${(v/maxS)*100}%;background:${
             k==='critical'||k==='high' ? 'linear-gradient(90deg,#ef4444,#f59e0b)' : 'var(--gradient)'
           }"></div></div>
@@ -130,17 +130,17 @@
           <td><a href="/violations">${r.ticket_id}</a></td>
           <td>${SafeCity.violationLabel(r.type)}</td>
           <td>${SafeCity.badgeSev(r.severity)}</td>
-          <td>${r.camera_id}</td>
+          <td>${SafeCity.escape(r.camera_id)}</td>
           <td>${SafeCity.money(r.fine)}</td>
           <td>${SafeCity.badgeStatus(r.status)}</td>
         </tr>`).join("") || `<tr><td colspan="6" style="color:var(--text-dim)">No activity</td></tr>`;
 
       document.getElementById("camBody").innerHTML = cams.map((c) => `
         <tr>
-          <td><code style="color:var(--accent)">${c.camera_id}</code></td>
-          <td>${c.name}</td>
-          <td>${c.location}</td>
-          <td><span class="badge badge-${c.status}">${c.status}</span></td>
+          <td><code style="color:var(--accent)">${SafeCity.escape(c.camera_id)}</code></td>
+          <td>${SafeCity.escape(c.name)}</td>
+          <td>${SafeCity.escape(c.location)}</td>
+          <td><span class="badge badge-${SafeCity.escape(c.status)}">${SafeCity.escape(c.status)}</span></td>
           <td>${c.violation_count}</td>
         </tr>`).join("");
     }

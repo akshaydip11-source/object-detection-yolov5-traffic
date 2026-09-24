@@ -1,0 +1,61 @@
+services:
+  app:
+    build: .
+    image: safecity-yolov5:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ENVIRONMENT: production
+      DEMO_MODE: 'false'
+      DATABASE_URL: sqlite:////app/data/safecity.db
+      MODEL_PATH: /app/models/best.pt
+      UPLOAD_DIR: /app/backend/uploads
+      YOLOV5_DIR: /app/yolov5
+    volumes:
+      - ./models:/app/models:ro
+      - app-data:/app/data
+      - app-uploads:/app/backend/uploads
+    expose:
+      - '8000'
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 3g
+    cpus: 2
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+  gateway:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://localhost}
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+volumes:
+  app-data:
+  app-uploads:
+  caddy-data:
+  caddy-config:

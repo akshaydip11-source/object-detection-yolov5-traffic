@@ -27,16 +27,16 @@
     <div class="eyebrow">Case study product</div>
     <h1 style="font-size:2.2rem;letter-spacing:-0.03em;margin:1rem 0">Object Detection with YOLO for traffic enforcement</h1>
     <p style="color:var(--text-muted);font-size:1.05rem;margin-bottom:2rem">
-      SafeCityAI is a web prototype for the <strong style="color:var(--text)">YOLOv5 traffic object-detection</strong> case study:
-      annotate traffic images, train a detector for helmets, missing helmets, and license plates, then evaluate image and video inference through an API.
+      SafeCityAI is an internship prototype of the <strong style="color:var(--text)">Object Detection with YOLOv5</strong> AI project:
+      annotate traffic data, train YOLO to spot Helmet, NoHelmet and LicensePlate, and expose an inference API —
+      wrapped in a modern console for officers and city operators.
     </p>
 
     <div class="card" style="margin-bottom:1.25rem">
       <div class="card-title">The core problem</div>
       <p style="color:var(--text-muted);font-size:.95rem">
-        Traffic police spend thousands of hours manually reviewing CCTV footage. The target custom model
-        detects the three labeled classes in an image or video. The current public deployment uses a
-        COCO-pretrained fallback and does not yet detect those custom classes.
+        Traffic police spend thousands of hours manually reviewing CCTV footage. SafeCityAI supports image, video and browser-frame review. Model predictions may be wrong and
+        must not be treated as proof of an offence. No CCTV streams are connected.
       </p>
     </div>
 
@@ -44,16 +44,14 @@
       <div class="card">
         <div class="card-title">Detection classes</div>
         <ul style="color:var(--text-muted);font-size:.9rem;display:grid;gap:.35rem">
-          <li>• Helmet</li>
-          <li>• No_Helmet</li>
-          <li>• License_Plate</li>
+          <li>• Helmet / NoHelmet (custom checkpoint)</li>
+          <li>• License plate region</li>
         </ul>
       </div>
       <div class="card">
         <div class="card-title">Tech stack</div>
         <ul style="color:var(--text-muted);font-size:.9rem;display:grid;gap:.35rem">
-          <li>• YOLOv5s transfer learning target</li>
-          <li>• ONNX Runtime + OpenCV inference</li>
+          <li>• YOLOv5 + PyTorch + OpenCV</li>
           <li>• FastAPI inference API</li>
           <li>• SQLite job &amp; ticket store</li>
           <li>• JWT roles (admin/officer/analyst)</li>
@@ -67,23 +65,22 @@
       <div class="card-title">Project phases (from brief)</div>
       <div class="steps" style="grid-template-columns:1fr;gap:.75rem">
         <div class="step"><h3>Week 1 — Data curation</h3><p>200–500 images, LabelImg/Roboflow annotation, YOLO txt labels, augmentation.</p></div>
-        <div class="step"><h3>Week 2 — Model training</h3><p>Fine-tune YOLOv5s from COCO weights and monitor validation mAP@0.5.</p></div>
-        <div class="step"><h3>Week 3 — Inference</h3><p>Confidence thresholding, video inference, and visual validation on held-out footage.</p></div>
-        <div class="step"><h3>Week 4 — Deployment</h3><p>FastAPI endpoint returns class, confidence, and bounding box coordinates as JSON.</p></div>
+        <div class="step"><h3>Week 2 — Model training</h3><p>YOLOv5 transfer learning from COCO, hyp.yaml, monitor mAP@0.5.</p></div>
+        <div class="step"><h3>Week 3 — Inference</h3><p>Confidence thresholding, video streams, visual validation on unseen frames.</p></div>
+        <div class="step"><h3>Week 4 — Deployment</h3><p>Flask/FastAPI endpoint returning class, confidence, and bounding boxes as JSON.</p></div>
       </div>
     </div>
 
     <div class="card">
-      <div class="card-title">Training status</div>
+      <div class="card-title">Custom weights</div>
       <p style="color:var(--text-muted);font-size:.9rem;margin-bottom:.75rem">
-        The current deployment uses COCO-pretrained <code style="color:var(--accent)">yolo11n.onnx</code> as a general-object fallback.
-        No annotated dataset or custom checkpoint is included, so the Helmet / No_Helmet / License_Plate model is not trained yet.
-        After supplying the dataset, fine-tune YOLOv5s from COCO weights:
+        Place your trusted custom YOLOv5 checkpoint at <code>models/best.pt</code>, or set
+        <code>MODEL_PATH</code>. The checkpoint must contain Helmet, NoHelmet and LicensePlate.
+        Missing or incompatible weights leave detection unavailable — no pretrained fallback is used.
       </p>
-      <pre style="background:var(--bg);padding:1rem;border-radius:10px;overflow:auto;font-size:.78rem;font-family:var(--mono);color:var(--text-muted);border:1px solid var(--border)">python training/train_yolov5.py --validate-only
-python training/train_yolov5.py --epochs 50 --batch 16
-# Set MODEL_PATH=weights/yolov5_custom.onnx
-# Set CLASS_NAMES_PATH=weights/traffic.names</pre>
+      <p style="color:var(--text-muted);font-size:.9rem">See README.md for setup and validation.
+        LicensePlate means bounding-box localization, not OCR. Accuracy and latency must be measured
+        with the actual trained weights. Operational APIs require sign-in; media links expire. This remains an internship prototype, not a certified enforcement system.</p>
     </div>
 
     <div style="margin-top:2rem;display:flex;gap:.75rem;flex-wrap:wrap">

@@ -19,7 +19,7 @@
         <a href="/about">ℹ️ About</a>
         <a href="/api/docs" target="_blank">🛠 API docs</a>
       </nav>
-      <div class="side-footer"><span id="modelName">Loading detector…</span><br/><span id="modelNote">Model status</span></div>
+      <div class="side-footer">Custom YOLOv5 · PyTorch<br/>Human review required</div>
     </aside>
 
     <div class="main">
@@ -32,6 +32,11 @@
       </header>
 
       <div class="page">
+        <div class="card" style="margin-bottom:1rem" role="status" aria-live="polite">
+          <strong id="modelName">Checking model availability…</strong>
+          <p id="modelNote" style="color:var(--text-muted);margin:.5rem 0">No training or accuracy claim is made from model loading alone.</p>
+          <button id="checkModel" class="btn btn-sm btn-secondary" type="button">Check model again</button>
+        </div>
         <div class="tabs" role="tablist">
           <button class="tab active" data-tab="image">Image</button>
           <button class="tab" data-tab="video">Video</button>
@@ -62,7 +67,7 @@
             </div>
             <div class="form-row">
               <label style="display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:var(--text-muted);cursor:pointer">
-                <input type="checkbox" id="createTickets" checked /> Auto-create violation tickets
+                <input type="checkbox" id="createTickets" /> Save image review tickets (officer sign-in required)
               </label>
               <div style="flex:1"></div>
               <button class="btn btn-primary" id="runBtn" disabled>
@@ -70,16 +75,15 @@
               </button>
             </div>
             <p style="font-size:.78rem;color:var(--text-dim);margin-top:.5rem">
-              Tip: use street scenes with bikes, cars, or junctions for richer violation flags.
+              Use licensed traffic images containing Helmet, NoHelmet or LicensePlate examples. A confidence score is not proof of a violation.
             </p>
             <div style="margin-top:.85rem">
               <div class="card-title">Try sample images</div>
               <div style="display:flex;flex-wrap:wrap;gap:.45rem" id="sampleBtns">
-                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/bus_street.jpg" data-name="bus_street.jpg">Bus street</button>
-                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/motorcycle.jpg" data-name="motorcycle.jpg">Motorcycle</button>
-                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/car_road.jpg" data-name="car_road.jpg">Cars</button>
-                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/traffic_city.jpg" data-name="traffic_city.jpg">City traffic</button>
-                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/crowd_zidane.jpg" data-name="crowd_zidane.jpg">Crowd</button>
+                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/street_cars.jpg" data-name="street_cars.jpg">Synthetic street</button>
+                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/bike_triple.jpg" data-name="bike_triple.jpg">Synthetic riders</button>
+                <button type="button" class="btn btn-sm btn-secondary sample-btn" data-src="/samples/junction_signal.jpg" data-name="junction_signal.jpg">Synthetic junction</button>
+                <p style="font-size:.8rem;color:var(--text-muted)">Illustrations for testing uploads only, not real traffic or model-validation data. Use your own licensed traffic images to evaluate detection.</p>
               </div>
             </div>
           </div>
@@ -113,11 +117,16 @@
 
         <div class="card" style="margin-bottom:1.25rem">
           <div class="card-title">Annotated result</div>
+          <p id="mediaNotice" hidden role="status" style="color:var(--warning);margin-bottom:.75rem"></p>
+          <div style="display:flex;gap:.5rem;margin-bottom:.75rem">
+            <button id="refreshResult" hidden type="button" class="btn btn-sm btn-secondary">Refresh result links</button>
+            <a id="downloadResult" hidden class="btn btn-sm btn-secondary" target="_blank" rel="noopener noreferrer">Open / download result</a>
+          </div>
           <div class="result-grid">
             <div class="result-img-wrap" id="resultWrap">
               <div class="empty-state" id="resultEmpty">Annotated frame appears here</div>
               <img id="resultImg" class="hidden" alt="Detection result" />
-              <video id="resultVid" class="hidden" controls></video>
+              <video title="If playback is unsupported, download the MP4 from Recent jobs and open it locally." id="resultVid" class="hidden" controls></video>
               <div class="loading-overlay hidden" id="loading"><div class="spinner" style="width:36px;height:36px;border-width:3px"></div></div>
             </div>
             <div>
@@ -151,39 +160,66 @@
 
   <script src="/app.js"></script>
   <script>
-    const state = { mode: "image", file: null };
+    const state = { mode: "image", file: null, busy: false, modelReady: false, maxUploadMB: 50, currentJob: null };
 
-    function showResultError(message) {
-      document.getElementById("resultImg").classList.add("hidden");
-      document.getElementById("resultVid").classList.add("hidden");
-      const empty = document.getElementById("resultEmpty");
-      empty.textContent = message;
-      empty.classList.remove("hidden");
-      document.getElementById("detList").textContent = message;
+    function updateRunButton() {
+      document.getElementById("runBtn").disabled = state.busy || !state.file || !state.modelReady;
     }
-
+    function clearResult(message = "Annotated frame appears here") {
+      state.currentJob = null;
+      for (const id of ["resultImg", "resultVid"]) {
+        const el = document.getElementById(id);
+        if (id === "resultVid") el.pause();
+        el.removeAttribute("src");
+        el.classList.add("hidden");
+      }
+      document.getElementById("resultEmpty").textContent = message;
+      document.getElementById("resultEmpty").classList.remove("hidden");
+      document.getElementById("summaryBox").classList.add("hidden");
+      document.getElementById("summaryEmpty").classList.remove("hidden");
+      document.getElementById("detList").textContent = message;
+      document.getElementById("mediaNotice").hidden = true;
+      document.getElementById("refreshResult").hidden = true;
+      document.getElementById("downloadResult").hidden = true;
+    }
+    function previewWarning(message) {
+      document.getElementById("mediaNotice").textContent = message;
+      document.getElementById("mediaNotice").hidden = false;
+    }
     document.getElementById("resultImg").addEventListener("error", () => {
-      showResultError("The annotated image could not be loaded. Run detection again or check the service logs.");
+      if (!state.currentJob) return;
+      document.getElementById("resultImg").classList.add("hidden");
+      previewWarning("Annotation preview could not be fetched. The link may have expired or the file may be missing. Refresh result links; detections below are unchanged.");
     });
     document.getElementById("resultVid").addEventListener("error", () => {
-      showResultError("The annotated video could not be played. Try an MP4/AVI/MOV clip under 50 MB.");
+      if (!state.currentJob) return;
+      // A codec/playback failure must NEVER erase the JPEG preview or detection records.
+      document.getElementById("resultVid").classList.add("hidden");
+      previewWarning("Video playback unavailable in this browser. The annotated still and detections remain valid. Use Open / download result, or refresh expired links.");
+    });
+    async function checkModel() {
+      try {
+        const health = await SafeCity.api("/health");
+        state.modelReady = Boolean(health.model_loaded);
+        state.maxUploadMB = health.max_upload_mb || 50;
+        document.getElementById("modelName").textContent = state.modelReady ? "Custom YOLOv5 checkpoint loaded" : "Custom YOLOv5 unavailable";
+        document.getElementById("modelNote").textContent = health.message || (state.modelReady ? "Ready for inference; validate accuracy separately." : "Supply your trusted checkpoint and restart the server.");
+      } catch (error) {
+        state.modelReady = false;
+        document.getElementById("modelName").textContent = "API unavailable";
+        document.getElementById("modelNote").textContent = error.message;
+      }
+      updateRunButton();
+    }
+    document.getElementById("checkModel").addEventListener("click", checkModel);
+    document.getElementById("refreshResult").addEventListener("click", async () => {
+      if (!state.currentJob || state.busy) return;
+      try { renderResult(await SafeCity.api(`/jobs/${encodeURIComponent(state.currentJob)}`)); }
+      catch (error) { previewWarning(`Could not refresh result: ${error.message}`); }
     });
 
     SafeCity.mountUserChip(document.getElementById("userChip"));
     SafeCity.refreshMe().then(() => SafeCity.mountUserChip(document.getElementById("userChip")));
-
-    fetch("/api/health").then(async (response) => {
-      if (!response.ok) throw new Error("Detector unavailable");
-      return response.json();
-    }).then((health) => {
-      document.getElementById("modelName").textContent = health.model_name;
-      document.getElementById("modelNote").textContent = health.model_name.includes("fallback")
-        ? "COCO demo · custom model not trained"
-        : `Classes: ${health.class_names.join(", ")}`;
-    }).catch(() => {
-      document.getElementById("modelName").textContent = "Detector unavailable";
-      document.getElementById("modelNote").textContent = "Check service health";
-    });
 
     const conf = document.getElementById("conf");
     const confVal = document.getElementById("confVal");
@@ -191,11 +227,13 @@
 
     document.querySelectorAll(".tab").forEach((t) => {
       t.addEventListener("click", () => {
+        if (state.busy) return;
         document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
         t.classList.add("active");
         state.mode = t.dataset.tab;
         state.file = null;
-        document.getElementById("runBtn").disabled = true;
+        clearResult();
+        updateRunButton();
         const input = document.getElementById("fileInput");
         if (state.mode === "image") {
           input.accept = "image/*";
@@ -204,7 +242,7 @@
         } else {
           input.accept = "video/*";
           document.getElementById("dropTitle").textContent = "Drop traffic video here";
-          document.getElementById("dropHint").textContent = "MP4, AVI, MOV, MKV, WEBM · max 50 MB · samples across the full clip";
+          document.getElementById("dropHint").textContent = "MP4, AVI, MOV, MKV, WEBM · up to 120 sampled frames across the clip";
         }
       });
     });
@@ -224,33 +262,28 @@
     });
 
     function setFile(f) {
-      const extension = f.name.split(".").pop().toLowerCase();
-      const allowed = state.mode === "video"
-        ? ["mp4", "avi", "mov", "mkv", "webm"]
-        : ["jpg", "jpeg", "png", "bmp", "webp"];
-      if (!allowed.includes(extension)) {
-        state.file = null;
-        document.getElementById("runBtn").disabled = true;
-        SafeCity.toast(`Unsupported ${state.mode} file type`, "err");
-        return;
-      }
-      if (f.size > 50 * 1024 * 1024) {
-        state.file = null;
-        document.getElementById("runBtn").disabled = true;
-        SafeCity.toast("File exceeds the 50 MB upload limit", "err");
-        return;
+      if (state.busy) return false;
+      clearResult();
+      state.file = null;
+      const suffix = f.name.split(".").pop().toLowerCase();
+      const allowed = state.mode === "video" ? ["mp4", "avi", "mov", "mkv", "webm"] : ["jpg", "jpeg", "png", "bmp", "webp"];
+      if (!allowed.includes(suffix) || f.size === 0 || f.size > state.maxUploadMB * 1024 * 1024) {
+        clearResult(`Choose a supported, nonempty ${state.mode} file under ${state.maxUploadMB} MB.`);
+        updateRunButton();
+        return false;
       }
       state.file = f;
       document.getElementById("dropTitle").textContent = f.name;
-      document.getElementById("dropHint").textContent = `${(f.size / 1024).toFixed(1)} KB ready · max 50 MB`;
-      document.getElementById("runBtn").disabled = false;
+      document.getElementById("dropHint").textContent = `${(f.size / 1024).toFixed(1)} KB ready`;
+      updateRunButton();
+      return true;
     }
 
     async function loadCameras() {
       try {
         const cams = await SafeCity.api("/cameras");
         const sel = document.getElementById("camera");
-        sel.innerHTML = cams.map((c) => `<option value="${c.camera_id}">${c.camera_id} — ${c.name}</option>`).join("");
+        sel.innerHTML = cams.length ? cams.map((c) => `<option value="${SafeCity.escape(c.camera_id)}">${SafeCity.escape(c.camera_id)} — ${SafeCity.escape(c.name)}</option>`).join("") : `<option value="CAM-01">Upload desk (no live camera)</option>`;
       } catch {
         document.getElementById("camera").innerHTML = `<option value="CAM-01">CAM-01</option>`;
       }
@@ -268,7 +301,7 @@
           <tr>
             <td><code style="color:var(--accent)">${j.job_id}</code></td>
             <td>${j.source_type}</td>
-            <td>${j.original_filename || "—"}</td>
+            <td>${SafeCity.escape(j.original_filename || "—")}</td>
             <td>${j.object_count}</td>
             <td style="color:${j.violation_count ? "var(--danger-2)" : "inherit"}">${j.violation_count}</td>
             <td>${SafeCity.fmtMs(j.processing_ms)}</td>
@@ -281,6 +314,13 @@
     }
 
     function renderResult(data) {
+      clearResult();
+      state.currentJob = data.job_id;
+      document.getElementById("refreshResult").hidden = false;
+      const download = document.getElementById("downloadResult");
+      const downloadURL = data.summary?.video_url || data.result_url;
+      if (downloadURL) { download.href = downloadURL; download.hidden = false; }
+      if (data.summary?.video_warning) previewWarning(data.summary.video_warning);
       document.getElementById("summaryEmpty").classList.add("hidden");
       document.getElementById("summaryBox").classList.remove("hidden");
       document.getElementById("sObjects").textContent = data.object_count;
@@ -296,7 +336,7 @@
         .slice(0, 8)
         .map(([k, v]) => `
           <div class="bar-row">
-            <span>${k}</span>
+            <span>${SafeCity.escape(k)}</span>
             <div class="bar-track"><div class="bar-fill" style="width:${(v / max) * 100}%"></div></div>
             <span class="count">${v}</span>
           </div>`).join("") || "<div style='color:var(--text-dim);font-size:.85rem'>No classes</div>";
@@ -308,14 +348,14 @@
       vid.classList.add("hidden");
       if (data.source_type === "video" && data.summary?.video_url) {
         // show snapshot if available else video
-        if (data.result_url && data.result_url.match(/\.(jpg|jpeg|png)$/i)) {
-          img.src = data.result_url + "?t=" + Date.now();
+        if (data.result_url && new URL(data.result_url, location.origin).pathname.match(/\.(jpg|jpeg|png)$/i)) {
+          img.src = data.result_url;
           img.classList.remove("hidden");
         }
         vid.src = data.summary.video_url;
         vid.classList.remove("hidden");
       } else if (data.result_url) {
-        img.src = data.result_url + "?t=" + Date.now();
+        img.src = data.result_url;
         img.classList.remove("hidden");
       }
 
@@ -328,7 +368,7 @@
       list.innerHTML = dets.slice(0, 40).map((d) => `
         <div class="det-item ${d.is_violation ? "viol" : ""}">
           <div>
-            <div class="name">${d.is_violation ? "⚠ " : ""}${d.violation_type ? SafeCity.violationLabel(d.violation_type) + " · " : ""}${d.class_name}</div>
+            <div class="name">${d.is_violation ? "⚠ " : ""}${d.violation_type ? SafeCity.violationLabel(d.violation_type) + " · " : ""}${SafeCity.escape(d.class_name)}</div>
             <div class="meta">[${d.box.x1.toFixed(0)}, ${d.box.y1.toFixed(0)}] → [${d.box.x2.toFixed(0)}, ${d.box.y2.toFixed(0)}]</div>
           </div>
           <div style="font-family:var(--mono);font-weight:600;color:${d.is_violation ? "var(--danger-2)" : "var(--success)"}">
@@ -338,24 +378,21 @@
     }
 
     document.getElementById("runBtn").addEventListener("click", async () => {
-      if (!state.file) return;
+      if (!state.file || state.busy || !state.modelReady) return;
+      state.busy = true;
+      clearResult("Running detection…");
       const btn = document.getElementById("runBtn");
       const loading = document.getElementById("loading");
       btn.disabled = true;
       document.getElementById("runLabel").innerHTML = `<span class="spinner"></span> Running…`;
       loading.classList.remove("hidden");
-      const resultEmpty = document.getElementById("resultEmpty");
-      resultEmpty.textContent = "Running detection…";
-      resultEmpty.classList.remove("hidden");
-      document.getElementById("detList").innerHTML =
-        `<div class="empty-state" style="padding:1.5rem">Waiting for detections…</div>`;
 
       const fd = new FormData();
       fd.append("file", state.file);
       fd.append("conf_threshold", conf.value);
       fd.append("camera_id", document.getElementById("camera").value);
       fd.append("location", document.getElementById("location").value);
-      fd.append("create_tickets", document.getElementById("createTickets").checked ? "true" : "false");
+      fd.append("create_tickets", state.mode !== "video" && document.getElementById("createTickets").checked ? "true" : "false");
       if (state.mode === "video") fd.append("max_frames", "120");
 
       try {
@@ -373,18 +410,18 @@
         renderResult(data);
         SafeCity.toast(
           data.violation_count
-            ? `Found ${data.violation_count} violation(s) in ${SafeCity.fmtMs(data.processing_ms)}`
-            : `Done — ${data.object_count} objects, no violations`,
+            ? `Found ${data.violation_count} review observation(s) in ${SafeCity.fmtMs(data.processing_ms)}`
+            : `Done — ${data.object_count} objects, no flags above threshold`,
           data.violation_count ? "ok" : "ok"
         );
         loadJobs();
       } catch (e) {
-        const message = e.message || String(e);
-        showResultError(`Detection failed: ${message}`);
-        SafeCity.toast(message, "err");
+        clearResult(`Detection failed: ${e.message || String(e)}`);
+        SafeCity.toast(e.message || String(e), "err");
       } finally {
         loading.classList.add("hidden");
-        btn.disabled = !state.file;
+        state.busy = false;
+        updateRunButton();
         document.getElementById("runLabel").textContent = "Run detection";
       }
     });
@@ -393,22 +430,22 @@
 
     document.querySelectorAll(".sample-btn").forEach((btn) => {
       btn.addEventListener("click", async () => {
+        if (state.busy) return;
         try {
           const res = await fetch(btn.dataset.src);
-          if (!res.ok) throw new Error(`Sample image request failed (${res.status})`);
+          if (!res.ok) throw new Error(`Sample fetch failed (${res.status})`);
           const blob = await res.blob();
           const file = new File([blob], btn.dataset.name, { type: blob.type || "image/jpeg" });
           state.mode = "image";
           document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "image"));
-          setFile(file);
-          SafeCity.toast(`Running sample: ${btn.dataset.name}`);
-          document.getElementById("runBtn").click();
+          if (setFile(file) && state.modelReady) document.getElementById("runBtn").click();
         } catch (e) {
           SafeCity.toast("Could not load sample", "err");
         }
       });
     });
 
+    checkModel();
     loadCameras();
     loadJobs();
   </script>

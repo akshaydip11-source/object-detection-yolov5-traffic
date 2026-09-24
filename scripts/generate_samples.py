@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Generate synthetic traffic-like sample images for demo detection."""
+
 from pathlib import Path
 import cv2
 import numpy as np
+import zlib
 
 OUT = Path(__file__).resolve().parents[1] / "frontend" / "samples"
 OUT.mkdir(parents=True, exist_ok=True)
@@ -23,12 +25,18 @@ def road_scene(name: str, w=960, h=540):
     # sidewalk
     cv2.rectangle(img, (0, h // 2 - 20), (w, h // 2), (70, 70, 75), -1)
 
-    rng = np.random.default_rng(abs(hash(name)) % (2**32))
+    rng = np.random.default_rng(zlib.crc32(name.encode("utf-8")))
 
     def car(x, y, scale=1.0, color=(30, 90, 200)):
         ww, hh = int(120 * scale), int(55 * scale)
         cv2.rectangle(img, (x, y), (x + ww, y + hh), color, -1)
-        cv2.rectangle(img, (x + int(15 * scale), y - int(28 * scale)), (x + ww - int(15 * scale), y + 5), (20, 40, 80), -1)
+        cv2.rectangle(
+            img,
+            (x + int(15 * scale), y - int(28 * scale)),
+            (x + ww - int(15 * scale), y + 5),
+            (20, 40, 80),
+            -1,
+        )
         # windows as "person" silhouettes
         cv2.rectangle(
             img,
@@ -37,8 +45,12 @@ def road_scene(name: str, w=960, h=540):
             (40, 50, 60),
             -1,
         )
-        cv2.circle(img, (x + int(30 * scale), y + hh), int(12 * scale), (20, 20, 20), -1)
-        cv2.circle(img, (x + ww - int(30 * scale), y + hh), int(12 * scale), (20, 20, 20), -1)
+        cv2.circle(
+            img, (x + int(30 * scale), y + hh), int(12 * scale), (20, 20, 20), -1
+        )
+        cv2.circle(
+            img, (x + ww - int(30 * scale), y + hh), int(12 * scale), (20, 20, 20), -1
+        )
 
     def bike(x, y, scale=1.0, with_riders=1):
         # wheels
@@ -49,12 +61,29 @@ def road_scene(name: str, w=960, h=540):
         for i in range(with_riders):
             rx = x + int(15 * scale) + i * int(18 * scale)
             ry = y - int(45 * scale) - i * 2
-            cv2.ellipse(img, (rx, ry), (int(12 * scale), int(28 * scale)), 0, 0, 360, (40, 50, 90), -1)
-            cv2.circle(img, (rx, ry - int(32 * scale)), int(10 * scale), (60, 70, 100), -1)
+            cv2.ellipse(
+                img,
+                (rx, ry),
+                (int(12 * scale), int(28 * scale)),
+                0,
+                0,
+                360,
+                (40, 50, 90),
+                -1,
+            )
+            cv2.circle(
+                img, (rx, ry - int(32 * scale)), int(10 * scale), (60, 70, 100), -1
+            )
 
     def person(x, y, scale=1.0):
         cv2.circle(img, (x, y - int(40 * scale)), int(12 * scale), (70, 80, 110), -1)
-        cv2.rectangle(img, (x - int(12 * scale), y - int(28 * scale)), (x + int(12 * scale), y + int(20 * scale)), (50, 60, 100), -1)
+        cv2.rectangle(
+            img,
+            (x - int(12 * scale), y - int(28 * scale)),
+            (x + int(12 * scale), y + int(20 * scale)),
+            (50, 60, 100),
+            -1,
+        )
 
     def traffic_light(x, y):
         cv2.rectangle(img, (x, y), (x + 24, y + 70), (20, 20, 20), -1)
@@ -84,7 +113,15 @@ def road_scene(name: str, w=960, h=540):
     noise = rng.normal(0, 6, img.shape).astype(np.int16)
     img = np.clip(img.astype(np.int16) + noise, 0, 255).astype(np.uint8)
     # banner
-    cv2.putText(img, f"SafeCityAI sample · {name}", (16, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2)
+    cv2.putText(
+        img,
+        f"SafeCityAI sample · {name}",
+        (16, 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (220, 220, 220),
+        2,
+    )
     path = OUT / f"{name}.jpg"
     cv2.imwrite(str(path), img, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     print("wrote", path)

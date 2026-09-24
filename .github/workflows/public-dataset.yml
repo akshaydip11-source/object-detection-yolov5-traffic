@@ -1,0 +1,77 @@
+name: Public dataset pilot
+on:
+  push:
+    branches: [arena/01a0cfd1-object-detection-yolov5-traffi]
+    paths:
+      - .github/workflows/public-dataset.yml
+      - training/public_dataset.py
+      - training/public_pilot.py
+permissions:
+  contents: read
+concurrency:
+  group: public-dataset-pilot
+  cancel-in-progress: true
+jobs:
+  pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      YOLOv5_AUTOINSTALL: 'false'
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      WANDB_MODE: disabled
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      - run: pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - run: pip check && python -m pytest tests/test_public_dataset.py tests/test_dataset.py -q
+      - uses: actions/cache/restore@v5
+        id: public-data-cache
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - name: Download pinned public export and validate labels, license and splits
+        run: python -m training.public_dataset --output runs/public-pilot-data --quarantine-invalid --polygon-boxes --download-cache .cache/public-data/rasyd.zip
+      - uses: actions/cache/save@v5
+        if: always() && steps.public-data-cache.outputs.cache-hit != 'true'
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - name: Train experimental YOLOv5n and evaluate held-out validation and test data
+        run: python -m training.public_pilot
+      - run: docker build -t safecity-ci .
+      - name: Actual trained checkpoint in the hardened production container
+        run: |
+          PILOT_CHECKPOINT=runs/public-pilot-results/experimental_best.pt \
+          PILOT_IMAGE="$(find runs/public-pilot-data/images/test -type f | sort | head -1)" \
+          python -m tests.container_smoke
+          echo "::notice title=Trained-checkpoint container smoke::Passed supplied trained checkpoint in non-root, read-only production Docker container, including authentication, real image inference and private media. Not accuracy certification."
+      - run: python -m playwright install --with-deps chromium
+      - name: Actual trained checkpoint through HTTP, API and Chromium
+        run: |
+          PILOT_CHECKPOINT=runs/public-pilot-results/experimental_best.pt \
+          PILOT_IMAGE="$(find runs/public-pilot-data/images/test -type f | sort | head -1)" \
+          RUN_BROWSER_TESTS=1 python -m pytest tests/test_browser.py::test_browser_actual_yolov5_image_flow -q
+          echo "::notice title=Trained-checkpoint browser smoke::Passed actual YOLOv5 pilot checkpoint through HTTP upload, inference, signed JPEG and Chromium rendering. Not accuracy certification."
+      - name: Keep reproducible audit and experimental results (never install automatically)
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: public-dataset-pilot
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            runs/public-pilot-data/provenance.json
+            runs/public-pilot-data/ATTRIBUTION.md
+            runs/public-pilot-results/
+            runs/public-pilot-evaluation/
+            runs/train/**/results.csv
+            runs/train/**/training_report.json
+            runs/train/**/hyp.yaml
+            runs/train/**/opt.yaml
