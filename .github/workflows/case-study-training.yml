@@ -4,6 +4,18 @@ name: Case-study YOLOv5s training
 # cancelled without results. Evaluation, charts, demo and smokes need the training
 # job always, because a stopped run still leaves best.pt and results.csv behind.
 on:
+  # The branch is not the default branch, so the dispatch API cannot reach this
+  # workflow; the push trigger with path filters is how a run is started here.
+  push:
+    branches: [arena/01a0cfd1-object-detection-yolov5-traffi]
+    paths:
+      - .github/workflows/case-study-training.yml
+      - training/train_yolov5.py
+      - training/export_dataset.py
+      - training/evaluate_checkpoint.py
+      - training/plot_results.py
+      - inference/make_demo.py
+      - docs/footage/saigon-traffic-credit.txt
   workflow_dispatch:
     inputs:
       weights:
