@@ -153,6 +153,22 @@
   <script>
     const state = { mode: "image", file: null };
 
+    function showResultError(message) {
+      document.getElementById("resultImg").classList.add("hidden");
+      document.getElementById("resultVid").classList.add("hidden");
+      const empty = document.getElementById("resultEmpty");
+      empty.textContent = message;
+      empty.classList.remove("hidden");
+      document.getElementById("detList").textContent = message;
+    }
+
+    document.getElementById("resultImg").addEventListener("error", () => {
+      showResultError("The annotated image could not be loaded. Run detection again or check the service logs.");
+    });
+    document.getElementById("resultVid").addEventListener("error", () => {
+      showResultError("The annotated video could not be played. Try an MP4/AVI/MOV clip under 50 MB.");
+    });
+
     SafeCity.mountUserChip(document.getElementById("userChip"));
     SafeCity.refreshMe().then(() => SafeCity.mountUserChip(document.getElementById("userChip")));
 
@@ -328,6 +344,11 @@
       btn.disabled = true;
       document.getElementById("runLabel").innerHTML = `<span class="spinner"></span> Running…`;
       loading.classList.remove("hidden");
+      const resultEmpty = document.getElementById("resultEmpty");
+      resultEmpty.textContent = "Running detection…";
+      resultEmpty.classList.remove("hidden");
+      document.getElementById("detList").innerHTML =
+        `<div class="empty-state" style="padding:1.5rem">Waiting for detections…</div>`;
 
       const fd = new FormData();
       fd.append("file", state.file);
@@ -358,7 +379,9 @@
         );
         loadJobs();
       } catch (e) {
-        SafeCity.toast(e.message || String(e), "err");
+        const message = e.message || String(e);
+        showResultError(`Detection failed: ${message}`);
+        SafeCity.toast(message, "err");
       } finally {
         loading.classList.add("hidden");
         btn.disabled = !state.file;

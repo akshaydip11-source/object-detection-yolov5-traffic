@@ -628,7 +628,8 @@ class YOLODetector:
         dets, violations = self.analyze_violations(dets)
         annotated = self.draw(img, dets, violations)
         result_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(result_path), annotated)
+        if not cv2.imwrite(str(result_path), annotated):
+            raise RuntimeError(f"Could not write annotated image: {result_path}")
         summary = self._summary(dets, violations, ms)
         return {
             "detections": [d.to_dict() for d in dets],
