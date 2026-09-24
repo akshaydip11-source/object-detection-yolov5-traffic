@@ -1,5 +1,6 @@
-﻿from pathlib import Path
+from pathlib import Path
 import pathlib
+import os
 import time
 import subprocess
 from dataclasses import dataclass
@@ -7,7 +8,7 @@ from typing import Any
 
 # Compatibility fix for YOLOv5 .pt files created in Linux/Colab
 # when loading them on Windows with Python 3.14.
-if hasattr(pathlib, "WindowsPath"):
+if os.name == "nt" and hasattr(pathlib, "WindowsPath"):
     pathlib.PosixPath = pathlib.WindowsPath
 
 import cv2
@@ -95,7 +96,7 @@ class SafeCityDetector:
             self.model.max_det = 100
 
             print(
-                f"✓ YOLO model loaded: "
+                f"? YOLO model loaded: "
                 f"{self.model_path} "
                 f"(input={self.input_size})"
             )
@@ -104,7 +105,7 @@ class SafeCityDetector:
             self.load_error = str(exc)
 
             print(
-                f"✗ YOLO model failed to load: "
+                f"? YOLO model failed to load: "
                 f"{exc}"
             )
 
@@ -724,3 +725,4 @@ def new_job_id() -> str:
     import uuid
 
     return uuid.uuid4().hex[:12]
+
