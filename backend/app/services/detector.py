@@ -4,7 +4,8 @@ ONNX object detection for the SafeCityAI YOLOv5 traffic case study.
 Loads the configured ONNX detector. The checked-in fallback is a COCO-pretrained
 YOLO11 model; a trained YOLOv5 ONNX model can be selected with MODEL_PATH and
 CLASS_NAMES_PATH. Custom No_Helmet detections are reported directly, while the
-COCO fallback keeps its explicitly heuristic traffic flags.
+COCO fallback reports objects only. COCO does not detect helmet or seatbelt
+status, so its detections must never be turned into traffic violations.
 """
 from __future__ import annotations
 
@@ -325,218 +326,31 @@ class YOLODetector:
 
     def analyze_violations(self, dets: list[Det]) -> tuple[list[Det], list[dict[str, Any]]]:
         """
-        Apply traffic enforcement heuristics on top of COCO detections.
-        Returns annotated dets + structured violation records.
-        """
-        if self.custom_classes:
-            violations: list[dict[str, Any]] = []
-            for det in dets:
-                class_name = det.class_name.strip().lower().replace("-", "_").replace(" ", "_")
-                if class_name in {"no_helmet", "nohelmet"}:
-                    det.is_violation = True
-                    det.violation_type = "no_helmet"
-                    violations.append(
-                        self._vrec(
-                            "no_helmet",
-                            det.confidence,
-                            det,
-                            vehicle_class="motorcycle",
-                            extra={"detected_class": det.class_name},
-                        )
-                    )
-            return dets, self._dedupe_violations(violations)
+        Report only violations supported by custom traffic classes.
 
-        persons = [d for d in dets if d.class_id == PERSON]
-        bikes = [d for d in dets if d.class_id in RIDER_VEHICLE_IDS]
-        cars = [d for d in dets if d.class_id in (CAR, BUS, TRUCK)]
-        lights = [d for d in dets if d.class_id == TRAFFIC_LIGHT]
-        stops = [d for d in dets if d.class_id == STOP_SIGN]
-        vehicles = [d for d in dets if d.class_id in VEHICLE_IDS]
+        COCO's person and vehicle classes cannot establish helmet status,
+        seatbelt use, or a traffic-rule violation. The fallback must not turn
+        those object detections into enforcement flags or tickets.
+        """
+        if not self.custom_classes:
+            return dets, []
 
         violations: list[dict[str, Any]] = []
-        claimed_persons: set[int] = set()
-
-        def pid(p: Det) -> int:
-            return id(p)
-
-        # --- Triple riding / multi-person on two-wheeler ---
-        for bike in bikes:
-            riders = [p for p in persons if self._person_near_vehicle(p, bike, expand=0.55)]
-            if len(riders) >= 3:
-                bike.is_violation = True
-                bike.violation_type = "triple_riding"
-                for p in riders:
-                    p.is_violation = True
-                    p.violation_type = p.violation_type or "triple_riding"
-                    claimed_persons.add(pid(p))
-                violations.append(
-                    self._vrec(
-                        "triple_riding",
-                        float(np.mean([r.confidence for r in riders] + [bike.confidence])),
-                        bike,
-                        vehicle_class=bike.class_name,
-                        extra={"rider_count": len(riders)},
-                    )
-                )
-            elif len(riders) >= 2 and bike.class_id == MOTORCYCLE:
-                # double riding still often needs helmet checks on both
-                bike.is_violation = True
-                bike.violation_type = "no_helmet"
-                for p in riders:
-                    p.is_violation = True
-                    p.violation_type = "no_helmet"
-                    claimed_persons.add(pid(p))
+        for det in dets:
+            class_name = det.class_name.strip().lower().replace("-", "_").replace(" ", "_")
+            if class_name in {"no_helmet", "nohelmet"}:
+                det.is_violation = True
+                det.violation_type = "no_helmet"
                 violations.append(
                     self._vrec(
                         "no_helmet",
-                        float(np.mean([r.confidence for r in riders])),
-                        riders[0],
-                        vehicle_class=bike.class_name,
-                        extra={"rider_count": len(riders), "note": "Multi-rider motorcycle — helmet check"},
-                    )
-                )
-            elif len(riders) >= 1:
-                for p in riders:
-                    if bike.class_id == MOTORCYCLE and p.confidence > 0.30:
-                        p.is_violation = True
-                        p.violation_type = "no_helmet"
-                        bike.is_violation = True
-                        bike.violation_type = bike.violation_type or "no_helmet"
-                        claimed_persons.add(pid(p))
-                        violations.append(
-                            self._vrec(
-                                "no_helmet",
-                                min(0.95, p.confidence * 0.92),
-                                p,
-                                vehicle_class=bike.class_name,
-                                extra={"note": "Helmet class requires custom-trained weights; heuristic flag for rider"},
-                            )
-                        )
-            elif bike.class_id == MOTORCYCLE and bike.confidence > 0.45:
-                # Motorcycle detected without a separate person box — still flag for helmet review
-                bike.is_violation = True
-                bike.violation_type = "no_helmet"
-                violations.append(
-                    self._vrec(
-                        "no_helmet",
-                        min(0.8, bike.confidence * 0.75),
-                        bike,
+                        det.confidence,
+                        det,
                         vehicle_class="motorcycle",
-                        extra={"note": "Motorcycle without clear helmet PPE class — review frame"},
+                        extra={"detected_class": det.class_name},
                     )
                 )
-
-        # --- Seatbelt proxy for car occupants ---
-        for car in cars:
-            occupants = [p for p in persons if self._person_near_vehicle(p, car, expand=0.15)]
-            cabin_occ = []
-            cy_mid = (car.y1 + car.y2) / 2
-            for p in occupants:
-                _, py = self._center(p)
-                if py < cy_mid + (car.y2 - car.y1) * 0.2:
-                    cabin_occ.append(p)
-            if len(cabin_occ) >= 1 and car.confidence > 0.35 and car.class_id == CAR:
-                p = cabin_occ[0]
-                if pid(p) not in claimed_persons:
-                    p.is_violation = True
-                    p.violation_type = "no_seatbelt"
-                    car.is_violation = True
-                    car.violation_type = car.violation_type or "no_seatbelt"
-                    claimed_persons.add(pid(p))
-                    violations.append(
-                        self._vrec(
-                            "no_seatbelt",
-                            min(0.9, p.confidence * 0.85),
-                            p,
-                            vehicle_class=car.class_name,
-                            extra={"note": "Seatbelt requires custom model; cabin-occupant heuristic"},
-                        )
-                    )
-            # dense crowd next to / on bus
-            nearby = [p for p in persons if self._person_near_vehicle(p, car, expand=0.4)]
-            if car.class_id == BUS and len(nearby) >= 3:
-                car.is_violation = True
-                car.violation_type = car.violation_type or "overcrowded_vehicle"
-                violations.append(
-                    self._vrec(
-                        "overcrowded_vehicle",
-                        float(np.mean([p.confidence for p in nearby[:5]] + [car.confidence])),
-                        car,
-                        vehicle_class="bus",
-                        extra={"person_count_near": len(nearby)},
-                    )
-                )
-            if len(occupants) >= 4 and car.class_id == CAR:
-                car.is_violation = True
-                car.violation_type = "overcrowded_vehicle"
-                violations.append(
-                    self._vrec(
-                        "overcrowded_vehicle",
-                        car.confidence,
-                        car,
-                        vehicle_class=car.class_name,
-                        extra={"occupant_count": len(occupants)},
-                    )
-                )
-
-        # --- Red light / stop sign proximity heuristics ---
-        if lights and vehicles:
-            for light in lights:
-                lx, ly = self._center(light)
-                light_w = max(light.x2 - light.x1, 20)
-                for v in vehicles:
-                    vx, vy = self._center(v)
-                    if abs(vx - lx) < light_w * 6 and vy > ly - 20:
-                        if v.confidence > 0.4 and light.confidence > 0.35:
-                            v.is_violation = True
-                            v.violation_type = v.violation_type or "red_light_suspect"
-                            violations.append(
-                                self._vrec(
-                                    "red_light_suspect",
-                                    min(v.confidence, light.confidence),
-                                    v,
-                                    vehicle_class=v.class_name,
-                                    extra={"traffic_light_conf": light.confidence},
-                                )
-                            )
-                            break
-
-        if stops and vehicles:
-            for stop in stops:
-                sx, sy = self._center(stop)
-                for v in vehicles:
-                    vx, vy = self._center(v)
-                    dist = ((vx - sx) ** 2 + (vy - sy) ** 2) ** 0.5
-                    if dist < max(v.x2 - v.x1, 80) * 2.5:
-                        v.is_violation = True
-                        v.violation_type = v.violation_type or "stop_sign_suspect"
-                        violations.append(
-                            self._vrec(
-                                "stop_sign_suspect",
-                                min(v.confidence, stop.confidence),
-                                v,
-                                vehicle_class=v.class_name,
-                            )
-                        )
-                        break
-
-        # High-density traffic cluster (useful ops signal)
-        if len(vehicles) >= 4 and len(persons) >= 3:
-            anchor = vehicles[0]
-            violations.append(
-                self._vrec(
-                    "high_risk_cluster",
-                    float(np.mean([v.confidence for v in vehicles[:4]])),
-                    anchor,
-                    vehicle_class="multi",
-                    extra={"vehicles": len(vehicles), "persons": len(persons)},
-                )
-            )
-            anchor.is_violation = True
-            anchor.violation_type = anchor.violation_type or "high_risk_cluster"
-
-        violations = self._dedupe_violations(violations)
-        return dets, violations
+        return dets, self._dedupe_violations(violations)
 
     def _vrec(
         self,
