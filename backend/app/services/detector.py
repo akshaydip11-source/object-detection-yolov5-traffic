@@ -400,6 +400,23 @@ class SafeCityDetector:
             "summary": summary,
         }
 
+    def process_image_file(
+        self,
+        image_path: Path,
+        output_path: Path,
+        conf_thr: float | None = None,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Compatibility wrapper used by the API image-upload route."""
+
+        if conf_thr is None:
+            conf_thr = kwargs.get("conf_threshold")
+
+        return self.process_image(
+            Path(image_path),
+            Path(output_path),
+            conf_thr=conf_thr,
+        )
     def process_video_file(
         self,
         video_path: Path,
@@ -598,3 +615,4 @@ def new_job_id() -> str:
     import uuid
 
     return uuid.uuid4().hex
+
