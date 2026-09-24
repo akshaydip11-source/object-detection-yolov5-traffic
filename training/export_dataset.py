@@ -8,6 +8,7 @@ augmentation, not new independent observations or additional manual annotation.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -16,6 +17,7 @@ import zipfile
 from PIL import Image, ImageEnhance, ImageOps
 import yaml
 
+from scripts.file_publish import publish_directory
 from training.dataset import DatasetError, IMAGE_SUFFIXES, validate_dataset
 from training.public_dataset import annotation
 
@@ -66,9 +68,6 @@ def export_dataset(data_file, output, attribution=None):
                 names = [(original_name, 'original')]
                 if split == 'train':
                     with Image.open(image) as opened:
-                        # Applying EXIF rotation here would invalidate stored coordinates.
-                        if opened.getexif().get(274, 1) != 1:
-                            raise DatasetError('Normalize image EXIF and labels together before augmentation')
                         decoded = opened.convert('RGB')
                         variants = [
                             ('flip', ImageOps.mirror(decoded), flip_labels(text)),
@@ -100,7 +99,7 @@ def export_dataset(data_file, output, attribution=None):
         (root / 'README.md').write_text('# Annotated dataset\n\nExtract to a new directory and train using the project wrapper:\n\n`python training/train_yolov5.py --data /absolute/path/to/data.yaml --weights yolov5s.pt --img-size 640 --hyp training/hyps/traffic.yaml`\n\nThe wrapper resolves portable YAML paths before invoking vendored YOLOv5. Keep variants with their original split. Read ATTRIBUTION.md and export_report.json.\n')
         if output.exists():
             raise DatasetError('Output appeared during export; refusing overwrite')
-        root.rename(output)
+        publish_directory(root, output)
     return report
 
 
@@ -109,18 +108,23 @@ def archive_dataset(output):
     archive = output.with_suffix('.zip')
     if archive.exists():
         raise DatasetError('Archive exists; refusing overwrite')
-    partial = archive.with_suffix('.zip.part')
+    # Own a unique temporary file; never remove someone else's .zip.part.
+    with tempfile.NamedTemporaryFile(prefix='.dataset-', suffix='.zip.part',
+                                     dir=archive.parent, delete=False) as stream:
+        partial = Path(stream.name)
     try:
-        with zipfile.ZipFile(partial, 'x', compression=zipfile.ZIP_DEFLATED) as z:
+        with zipfile.ZipFile(partial, 'w', compression=zipfile.ZIP_DEFLATED) as z:
             for file in sorted(output.rglob('*')):
                 if file.is_file():
                     z.write(file, file.relative_to(output))
         if partial.stat().st_size > 250_000_000:
             raise DatasetError('Archive exceeds 250 MB handover limit')
-        partial.rename(archive)
-    except Exception:
+        try:
+            os.link(partial, archive)  # Atomic no-clobber publication on this filesystem.
+        except FileExistsError as exc:
+            raise DatasetError('Archive appeared during export; refusing overwrite') from exc
+    finally:
         partial.unlink(missing_ok=True)
-        raise
     return archive
 
 

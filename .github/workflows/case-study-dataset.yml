@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/case-study-dataset.yml
       - training/export_dataset.py
+      - scripts/file_publish.py
 permissions:
   contents: read
 jobs:

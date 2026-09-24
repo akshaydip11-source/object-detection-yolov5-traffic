@@ -16,6 +16,7 @@ import time
 
 import cv2
 from imageio_ffmpeg import get_ffmpeg_exe
+from scripts.file_publish import publish_directory
 
 
 def video_info(path):
@@ -90,7 +91,7 @@ def make_demo(source, checkpoint, credit, output, *, start=0, conf=0.5, timeout=
         shutil.copyfile(credit, bundle / 'FOOTAGE_LICENSE.txt')
         if output.exists():
             raise ValueError('Output appeared during processing; refusing overwrite')
-        bundle.rename(output)
+        publish_directory(bundle, output)
     return report
 
 

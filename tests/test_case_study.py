@@ -147,3 +147,59 @@ def test_runtime_yaml_drops_unvalidated_download_directives(small_dataset, tmp_p
     report = validate_dataset(small_dataset)
     path = materialize_data_config(small_dataset, report, tmp_path / 'runtime.yaml')
     assert 'download' not in yaml.safe_load(path.read_text())
+
+
+def test_archive_never_removes_another_writers_partial(small_dataset, tmp_path):
+    output = tmp_path / 'bundle'
+    export_dataset(small_dataset, output)
+    existing = output.with_suffix('.zip.part')
+    existing.write_text('another writer owns this')
+    archive_dataset(output)
+    assert existing.read_text() == 'another writer owns this'
+
+
+def test_archive_race_cannot_clobber_completed_file(small_dataset, tmp_path, monkeypatch):
+    import os
+    output = tmp_path / 'bundle'
+    export_dataset(small_dataset, output)
+    original_link = os.link
+
+    def competing_writer(source, target):
+        Path(target).write_text('another completed archive')
+        return original_link(source, target)
+
+    monkeypatch.setattr(os, 'link', competing_writer)
+    with pytest.raises(DatasetError, match='refusing overwrite'):
+        archive_dataset(output)
+    assert output.with_suffix('.zip').read_text() == 'another completed archive'
+    assert not list(tmp_path.glob('.dataset-*.zip.part'))
+
+
+def test_bundle_publication_preserves_existing_empty_directory(tmp_path):
+    from scripts.file_publish import publish_directory
+    source, output = tmp_path / 'staging', tmp_path / 'existing'
+    source.mkdir()
+    (source / 'file').write_text('new data')
+    output.mkdir()
+    with pytest.raises(FileExistsError):
+        publish_directory(source, output)
+    assert output.is_dir() and not list(output.iterdir())
+    assert (source / 'file').read_text() == 'new data'
+
+
+def test_failed_publication_cleans_only_its_new_destination(tmp_path, monkeypatch):
+    import shutil
+    from scripts.file_publish import publish_directory
+    source, output = tmp_path / 'staging', tmp_path / 'new'
+    source.mkdir()
+    (source / 'file').write_text('original')
+
+    def fail_copy(*args, **kwargs):
+        (output / 'partial').write_text('partial')
+        raise OSError('simulated disk failure')
+
+    monkeypatch.setattr(shutil, 'copytree', fail_copy)
+    with pytest.raises(OSError, match='simulated disk'):
+        publish_directory(source, output)
+    assert not output.exists()
+    assert (source / 'file').read_text() == 'original'
