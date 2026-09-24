@@ -130,5 +130,7 @@ class HealthOut(BaseModel):
     model_path: str
     version: str = "1.0.0"
     load_error: str | None = None
+    model_name: str | None = None
+    model_imgsz: int | None = None
 
 

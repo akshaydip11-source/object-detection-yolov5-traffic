@@ -68,12 +68,31 @@ def health():
     except Exception:
         loaded = False
     return HealthOut(
-        status="ok",
+        status="ok" if loaded else "degraded",
         app=settings.app_name,
         model_loaded=loaded,
         model_path=str(settings.model_path),
         load_error=getattr(det, "load_error", None),
+        model_name=getattr(det, "model_label", None),
+        model_imgsz=getattr(det, "imgsz", None),
     )
+
+
+def _require_detector():
+    """Fail with a clear 503 instead of silently returning zero objects.
+
+    Regression guard: when the model failed to load, detect endpoints used to
+    answer HTTP 200 with object_count=0, which is indistinguishable from
+    "nothing in frame" — that is what made this bug so hard to see.
+    """
+    det = get_detector()
+    if not det.loaded:
+        raise HTTPException(
+            503,
+            "Detection model unavailable — no inference was run. "
+            f"{det.load_error or ''} (MODEL_PATH={settings.model_path})".strip(),
+        )
+    return det
 
 
 # ---------- Auth ----------
@@ -125,6 +144,8 @@ async def detect_image(
     user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
+    _require_detector()
+
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_IMAGE:
         raise HTTPException(400, f"Unsupported image type. Allowed: {sorted(ALLOWED_IMAGE)}")
@@ -209,6 +230,8 @@ async def detect_video(
     user: User | None = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
+    _require_detector()
+
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_VIDEO:
         raise HTTPException(400, f"Unsupported video type. Allowed: {sorted(ALLOWED_VIDEO)}")

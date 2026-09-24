@@ -20,9 +20,10 @@ class Settings(BaseSettings):
     # Storage
     upload_dir: Path = BASE_DIR / "uploads"
 
-    # YOLOv5 custom traffic model
-    # The trained model will be placed here after Colab training.
-    model_path: Path = ROOT_DIR / "models" / "best.pt"
+    # YOLOv5 custom traffic model, exported to ONNX (models/best.onnx).
+    # Export once with:  python scripts/export_onnx.py --weights models/best.pt
+    # Override with the MODEL_PATH env var (e.g. /app/models/best.onnx).
+    model_path: Path = ROOT_DIR / "models" / "best.onnx"
 
     # Required SafeCityAI classes
     class_names: list[str] = [
@@ -35,6 +36,18 @@ class Settings(BaseSettings):
     max_upload_mb: int = 50
     conf_threshold: float = 0.35
     iou_threshold: float = 0.45
+
+    # Inference tuning (free Render instances have ~0.1 CPU)
+    # MODEL_IMGSZ: 640 = most accurate, 512 default, 448 ~2x faster, 320 ~4x faster
+    model_imgsz: int = 512
+    # ORT_THREADS: keep at 1 on a CPU-capped instance (more threads = contention)
+    ort_threads: int = 1
+    # VIDEO_MAX_FRAMES: frames actually analysed per video (sampled across the clip)
+    video_max_frames: int = 32
+    # The model sometimes reports Helmet *and* NoHelmet for the same head.
+    # When two boxes of different classes overlap heavily only the more
+    # confident one is kept, so no bogus "no helmet" ticket is created.
+    resolve_class_conflicts: bool = True
 
     # Default development admin
     default_admin_email: str = "admin@safecity.ai"
