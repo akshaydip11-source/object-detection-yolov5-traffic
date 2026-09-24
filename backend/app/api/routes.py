@@ -236,13 +236,24 @@ async def detect_video(
     if suffix not in ALLOWED_VIDEO:
         raise HTTPException(400, f"Unsupported video type. Allowed: {sorted(ALLOWED_VIDEO)}")
 
-    data = await file.read()
-    if len(data) > settings.max_upload_mb * 1024 * 1024:
-        raise HTTPException(400, f"File too large (max {settings.max_upload_mb}MB)")
-
+    # Stream to disk in chunks instead of buffering the whole upload in RAM —
+    # a 50 MB video held in memory is a real chunk of a 512 MB instance.
     job_id = new_job_id()
     in_path = settings.upload_dir / "videos" / f"{job_id}{suffix}"
-    in_path.write_bytes(data)
+    in_path.parent.mkdir(parents=True, exist_ok=True)
+    limit = settings.max_upload_mb * 1024 * 1024
+    written = 0
+    with in_path.open("wb") as out:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > limit:
+                out.close()
+                in_path.unlink(missing_ok=True)
+                raise HTTPException(400, f"File too large (max {settings.max_upload_mb}MB)")
+            out.write(chunk)
     out_path = settings.upload_dir / "results" / f"{job_id}_annotated.mp4"
 
     job = DetectionJob(

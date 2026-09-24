@@ -143,6 +143,12 @@ class SafeCityDetector:
             # Render's free instance is CPU-capped; extra threads only add contention.
             opts.intra_op_num_threads = max(1, int(settings.ort_threads))
             opts.inter_op_num_threads = 1
+            # Dynamic-shape models grow the memory arena run after run. On a
+            # 512 MB instance that is what tips the process into an OOM kill, so
+            # trade a little speed for a flat memory profile.
+            opts.enable_cpu_mem_arena = False
+            opts.enable_mem_pattern = False
+            opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
             opts.log_severity_level = 3
 
             self.session = ort.InferenceSession(
@@ -190,7 +196,7 @@ class SafeCityDetector:
         self, img: np.ndarray, new_shape: int | None = None
     ) -> tuple[np.ndarray, float, tuple[int, int]]:
         """Resize + pad keeping aspect ratio (YOLOv5 letterbox)."""
-        new_shape = new_shape or self.imgsz
+        new_shape = int(new_shape or self.imgsz)
         h, w = img.shape[:2]
         r = min(new_shape / h, new_shape / w)
         nh, nw = int(round(h * r)), int(round(w * r))
@@ -209,9 +215,9 @@ class SafeCityDetector:
         return out, r, (left, top)
 
     def _preprocess(
-        self, img_bgr: np.ndarray
+        self, img_bgr: np.ndarray, imgsz: int | None = None
     ) -> tuple[np.ndarray, float, tuple[int, int]]:
-        boxed, r, pad = self._letterbox(img_bgr)
+        boxed, r, pad = self._letterbox(img_bgr, imgsz)
         rgb = cv2.cvtColor(boxed, cv2.COLOR_BGR2RGB)
         x = rgb.astype(np.float32) / 255.0
         x = np.transpose(x, (2, 0, 1))[None, ...]
@@ -350,6 +356,7 @@ class SafeCityDetector:
         self,
         image: np.ndarray,
         conf_thr: float | None = None,
+        imgsz: int | None = None,
     ) -> list[Detection]:
         if not self.loaded or self.session is None:
             return []
@@ -360,7 +367,7 @@ class SafeCityDetector:
             else float(settings.conf_threshold)
         )
 
-        inp, r, pad = self._preprocess(image)
+        inp, r, pad = self._preprocess(image, imgsz)
         outputs = self.session.run(None, {self.input_name: inp})
         return self._postprocess(
             outputs[0],
@@ -547,6 +554,9 @@ class SafeCityDetector:
 
         budget = int(max_frames) if max_frames else int(settings.video_max_frames)
         budget = max(1, min(budget, int(settings.video_max_frames)))
+        # video frames are analysed at a smaller size: faster and less memory,
+        # with no measurable loss on the traffic classes
+        video_imgsz = int(getattr(settings, "video_imgsz", 0) or self.imgsz)
 
         # analyse one frame every `step` frames, covering the entire clip
         if total_frames > 0:
@@ -583,7 +593,9 @@ class SafeCityDetector:
                     break
 
                 if frame_index % step == 0 and processed_frames < budget:
-                    detections = self._detect(frame, conf_thr=conf_thr)
+                    detections = self._detect(
+                        frame, conf_thr=conf_thr, imgsz=video_imgsz
+                    )
                     violations = self._build_violations(detections)
 
                     for detection in detections:
@@ -617,15 +629,23 @@ class SafeCityDetector:
         # OpenCV's mp4v is not playable in most browsers — transcode to H.264.
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg:
+            # Memory matters more than compression here: x264's default frame
+            # threading peaks around 340 MB on 720p and gets the worker OOM-killed
+            # on Render's free 512 MB instance. Single-threaded ultrafast with
+            # lookahead disabled peaks near 90 MB and is still faster in wall time
+            # because the instance has ~0.1 CPU anyway.
             completed = subprocess.run(
                 [
                     ffmpeg, "-y", "-loglevel", "error",
                     "-i", str(raw_path),
                     "-an",
+                    "-filter_threads", "1",
                     "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
                     "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-crf", "28",
+                    "-preset", "ultrafast",
+                    "-crf", "26",
+                    "-threads", "1",
+                    "-x264-params", "rc-lookahead=0:sync-lookahead=0:bframes=0",
                     "-pix_fmt", "yuv420p",
                     "-movflags", "+faststart",
                     str(output_path),

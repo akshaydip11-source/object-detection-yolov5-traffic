@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     ort_threads: int = 1
     # VIDEO_MAX_FRAMES: frames actually analysed per video (sampled across the clip)
     video_max_frames: int = 32
+    # VIDEO_IMGSZ: resolution used for video frames (smaller = faster, less memory).
+    # 0 = same as MODEL_IMGSZ.
+    video_imgsz: int = 448
     # The model sometimes reports Helmet *and* NoHelmet for the same head.
     # When two boxes of different classes overlap heavily only the more
     # confident one is kept, so no bogus "no helmet" ticket is created.
