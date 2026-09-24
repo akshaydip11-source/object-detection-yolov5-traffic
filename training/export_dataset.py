@@ -56,6 +56,9 @@ def export_dataset(data_file, output, attribution=None):
                     continue
                 relative = image.relative_to(images)
                 text = (labels / relative.with_suffix('.txt')).read_text()
+                with Image.open(image) as metadata:
+                    if metadata.getexif().get(274, 1) != 1:
+                        raise DatasetError('Normalize image EXIF and labels together before exporting')
                 group = hashlib.sha256(f'{split}/{relative}'.encode()).hexdigest()[:24]
                 original_name = group + '__original' + image.suffix.lower()
                 shutil.copyfile(image, root / 'images' / split / original_name)

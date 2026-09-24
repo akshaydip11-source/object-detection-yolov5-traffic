@@ -46,7 +46,7 @@ def make_demo(source, checkpoint, credit, output, *, start=0, conf=0.5, timeout=
         raise ValueError('Supply real source footage, a trusted custom checkpoint and its footage credit/license file')
     if output.exists():
         raise ValueError('Output exists; refusing overwrite')
-    if not math.isfinite(conf) or not 0 <= conf <= 1 or not 1 <= timeout <= 3600:
+    if not math.isfinite(conf) or not 0 <= conf <= 1 or not 1 <= timeout <= 600:
         raise ValueError('Invalid confidence threshold or offline processing time limit')
     validate_window(video_info(source), start)
     from backend.app.config import settings
@@ -81,7 +81,7 @@ def make_demo(source, checkpoint, credit, output, *, start=0, conf=0.5, timeout=
         report = {
             'source_filename': source.name, 'source_start_seconds': start,
             'duration_seconds': rendered['seconds'], 'display_fps': rendered['fps'],
-            'checkpoint_sha256': digest, 'confidence_threshold': conf,
+            'checkpoint_sha256': digest, 'confidence_threshold': conf, 'device': settings.device,
             'processing_seconds': elapsed, 'offline_frames_per_second': 300 / elapsed,
             'real_time_certified': False, 'summary': result['summary'],
             'note': 'Offline model output; manual scene/box/rights review required. A drawn No_Helmet box is not a legal finding. Display FPS is not inference throughput.',

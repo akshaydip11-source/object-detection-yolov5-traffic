@@ -128,3 +128,22 @@ def test_demo_file_contract_with_synthetic_fixture_not_real_demo(tmp_path, detec
     assert result['summary']['frames_processed'] == 300
     assert video_info(output / 'demo-30s.mp4')['seconds'] == pytest.approx(30, abs=0.1)
     assert (output / 'FOOTAGE_LICENSE.txt').read_text() == credit.read_text()
+
+
+def test_validation_images_with_exif_rotation_are_not_silently_mislabeled(small_dataset, tmp_path):
+    file = small_dataset.parent / 'images/val/sample.jpg'
+    with Image.open(file) as decoded:
+        exif = Image.Exif()
+        exif[274] = 6
+        decoded.save(file, exif=exif)
+    with pytest.raises(DatasetError, match='EXIF'):
+        export_dataset(small_dataset, tmp_path / 'bundle')
+
+
+def test_runtime_yaml_drops_unvalidated_download_directives(small_dataset, tmp_path):
+    config = yaml.safe_load(small_dataset.read_text())
+    config['download'] = 'must-not-be-forwarded-or-executed'
+    small_dataset.write_text(yaml.safe_dump(config))
+    report = validate_dataset(small_dataset)
+    path = materialize_data_config(small_dataset, report, tmp_path / 'runtime.yaml')
+    assert 'download' not in yaml.safe_load(path.read_text())

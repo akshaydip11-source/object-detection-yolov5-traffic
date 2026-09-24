@@ -51,6 +51,16 @@ ambiguity and forwarding no YAML download scripts. Checkpoints/data/ZIPs stay ou
 The **Case-study annotated dataset** Actions workflow exports a downloadable ZIP;
 its artifact retention is seven days, not permanent public hosting.
 
+**Generated and validated on 24 September 2026:**
+[successful export run](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35946271955)
+and [downloadable annotated-dataset artifact](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35946271955/artifacts/10786861674)
+(~121.7 MB; expires **1 October 2026**). Its runner annotation confirms 960/64/64
+exported images and train box counts **537 Helmet / 246 No_Helmet / 300 License_Plate**.
+Inner `case-study-dataset.zip` SHA256:
+`832cea9007b2ec8ed605d2ad92f3cb5483cee869df3e4397f08decece5908ced`.
+This archive's existence is verified remotely; it was not downloaded into the Git
+working tree. Keep a local copy before expiry or regenerate with the commands above.
+
 ## 2. Training configuration and actual charts
 
 Open `training/safecityai_yolov5_training.ipynb` in Colab, enable an available GPU,
@@ -92,7 +102,8 @@ Outputs `demo-30s.mp4`, a JPEG preview, `demo_report.json` and `FOOTAGE_LICENSE.
 The report records the model SHA256, threshold, processed frames and measured offline
 throughput. A 10fps encoded video does **not** establish real-time inference. The CLI
 rejects short/incomplete clips rather than looping or padding them into a fake demo.
-Its separate, bounded offline time budget does not increase HTTP API limits. It does
+Its separate, bounded offline time budget (up to 600 seconds) does not increase HTTP API limits.
+On an available GPU, set `DEVICE=0`; the report records the selected device. It does
 not certify scene content or legal violations; inspect predicted boxes manually.
 
 ## 4. Brief-compatible API
