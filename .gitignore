@@ -19,6 +19,7 @@ backend/uploads/reports/*
 !backend/uploads/results/.gitkeep
 !backend/uploads/reports/.gitkeep
 models/*.pt
+!models/best.pt
 runs/
 outputs/*
 !outputs/.gitkeep
@@ -31,3 +32,6 @@ dataset/labels/*
 *.log
 .vscode/
 .idea/
+
+# Local frontend backups
+frontend/*.backup

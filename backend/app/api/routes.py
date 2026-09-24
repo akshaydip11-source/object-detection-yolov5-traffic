@@ -242,7 +242,7 @@ async def detect_video(
         job.status = "done"
         job.result_path = result["result_path"]
         job.object_count = result["summary"].get("total_raw_detections", 0)
-        job.violation_count = result["summary"].get("unique_violation_flags", 0)
+        job.violation_count = len(result["violations"])
         job.processing_ms = result["processing_ms"]
         job.detections_json = {"items": result["detections"]}
         job.summary_json = result["summary"]
@@ -620,3 +620,4 @@ def dashboard_stats(db: Session = Depends(get_db)):
 @router.get("/users", response_model=list[UserOut])
 def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     return db.query(User).order_by(User.created_at.desc()).all()
+

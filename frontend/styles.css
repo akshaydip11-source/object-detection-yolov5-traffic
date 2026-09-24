@@ -562,3 +562,4 @@ tr:last-child td { border-bottom: none; }
   .live-grid { grid-template-columns: 1fr 320px; }
   .app-shell { grid-template-columns: 240px 1fr; }
 }
+
