@@ -1,0 +1,47 @@
+name: Pilot model review
+on:
+  push:
+    branches: [arena/01a0cfd1-object-detection-yolov5-traffi]
+    paths:
+      - .github/workflows/pilot-review.yml
+      - training/review_pilot.py
+permissions:
+  contents: read
+  actions: read
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      YOLOv5_AUTOINSTALL: 'false'
+      OMP_NUM_THREADS: '2'
+      MKL_NUM_THREADS: '2'
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      - run: pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/download-artifact@v7
+        with:
+          name: public-dataset-pilot
+          run-id: 35942772831
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: runs/previous-pilot
+      - uses: actions/cache/restore@v5
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - run: python -m training.public_dataset --output runs/public-pilot-data --polygon-boxes --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+      - run: python -m training.review_pilot
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: pilot-validation-review
+          path: runs/pilot-review/
+          retention-days: 14
+          if-no-files-found: warn
