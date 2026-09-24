@@ -40,7 +40,7 @@ ATTRIBUTION = {
     "license_url": "https://creativecommons.org/licenses/by/4.0/",
     "mirror_commit": SOURCE_COMMIT,
     "archive_sha256": SOURCE_SHA256,
-    "changes": "Deterministic subset; one variant per named original; drop non-target classes; remap IDs to Helmet=0, NoHelmet=1, LicensePlate=2. No new annotations.",
+    "changes": "Deterministic subset; one variant per named original; explicitly quarantine invalid groups when requested; drop non-target classes; remap IDs to Helmet=0, NoHelmet=1, LicensePlate=2. No new annotations.",
     "limitations": "Publisher-declared license, not a warranty of underlying image rights. Source-video identities and near-duplicate scenes are not established; group isolation by original filename is not video-level isolation. Pilot only, not enforcement approval.",
 }
 
@@ -72,7 +72,7 @@ def remap_labels(text):
             if not (0 < w <= 1 and 0 < h <= 1 and w / 2 - 1e-6 <= x <= 1 - w / 2 + 1e-6 and h / 2 - 1e-6 <= y <= 1 - h / 2 + 1e-6):
                 raise ValueError()
         except ValueError as exc:
-            raise DatasetError("Invalid source annotation; no automatic box repair performed") from exc
+            raise DatasetError("Invalid source annotation; no automatic box repair performed: " + json.dumps(fields)) from exc
         if cid in CLASS_MAP:
             target = CLASS_MAP[cid]
             rows.append(" ".join([str(target), *fields[1:]]))
@@ -102,7 +102,7 @@ def select_records(records, limit):
     return selected
 
 
-def prepare(archive, output, limits=None):
+def prepare(archive, output, limits=None, quarantine_invalid=False):
     limits = limits or {"train": 320, "val": 64, "test": 64}
     if output.exists():
         raise DatasetError("Output already exists; use a new directory (never overwrite data)")
@@ -129,7 +129,7 @@ def prepare(archive, output, limits=None):
         root = str(PurePosixPath(config_name).parent)
         root = "" if root == "." else root + "/"
         available = {m.filename for m in members}
-        records, groups, manifest = {}, {}, []
+        records, groups, manifest, quarantined = {}, {}, [], []
         for split, source_split in (("train", "train"), ("val", "valid"), ("test", "test")):
             found = []
             for name in sorted(available):
@@ -147,9 +147,15 @@ def prepare(archive, output, limits=None):
                 try:
                     text, counts = remap_labels(z.read(label).decode("utf-8"))
                 except DatasetError as exc:
-                    raise DatasetError(f"{exc}: {label}") from exc
+                    if not quarantine_invalid:
+                        raise DatasetError(f"{exc}: {label}") from exc
+                    quarantined.append({"source_group": group, "source_label": label, "reason": str(exc)})
+                    continue
                 found.append({"image": name, "label": label, "group": group, "text": text, "counts": counts})
-            records[split] = select_records(found, limits[split])
+            records[split] = found
+        if len(quarantined) > len(groups) * 0.05:
+            raise DatasetError(f"Invalid source groups exceed 5% quarantine limit ({len(quarantined)}/{len(groups)}): " + json.dumps(quarantined[:2]))
+        records = {split: select_records(rows, limits[split]) for split, rows in records.items()}
         output.mkdir(parents=True)
         hashes = {}
         for split, rows in records.items():
@@ -171,6 +177,7 @@ def prepare(archive, output, limits=None):
         data_file = output / "data.yaml"
         data_file.write_text(yaml.safe_dump(data))
         report = validate_dataset(data_file)
+        report["quarantined_source_groups"] = quarantined
         report["attribution"] = ATTRIBUTION
         report["manifest"] = manifest
         report["source_groups_by_split"] = dict(Counter(groups.values()))
@@ -183,12 +190,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--archive", type=Path, help="Use an already downloaded, checksum-verified export")
+    parser.add_argument("--download-cache", type=Path, help="Cache only the checksum-verified public ZIP for repeated CI audits")
+    parser.add_argument("--quarantine-invalid", action="store_true", help="Explicitly exclude invalid original-image groups, up to 5%; record every exclusion, never repair boxes")
     args = parser.parse_args()
+    if args.archive and args.download_cache:
+        parser.error("Choose --archive or --download-cache, not both")
     with tempfile.TemporaryDirectory(prefix="safecity-public-") as temp:
-        archive = args.archive or Path(temp) / "source.zip"
-        if not args.archive:
+        archive = args.archive or args.download_cache or Path(temp) / "source.zip"
+        if not args.archive and not archive.exists():
+            archive.parent.mkdir(parents=True, exist_ok=True)
+            partial = archive.with_suffix(".part")
             digest = hashlib.sha256()
-            with urllib.request.urlopen(SOURCE_URL, timeout=60) as response, archive.open("wb") as stream:
+            with urllib.request.urlopen(SOURCE_URL, timeout=60) as response, partial.open("wb") as stream:
                 size = 0
                 while chunk := response.read(1024 * 1024):
                     size += len(chunk)
@@ -198,9 +211,10 @@ def main():
                     stream.write(chunk)
             if size != SOURCE_SIZE or digest.hexdigest() != SOURCE_SHA256:
                 raise DatasetError("Public archive size/hash mismatch")
+            partial.replace(archive)
         # Build transactionally: an invalid source never leaves a usable partial dataset.
         staging = Path(temp) / "prepared"
-        report = prepare(archive, staging)
+        report = prepare(archive, staging, quarantine_invalid=args.quarantine_invalid)
         if args.output.exists():
             raise DatasetError("Output already exists; choose a new directory")
         shutil.copytree(staging, args.output)
@@ -211,6 +225,8 @@ def main():
         report["path"] = str(args.output.resolve())
         (args.output / "provenance.json").write_text(json.dumps(report, indent=2))
         summary = {k: v for k, v in report.items() if k != "manifest"}
+        exclusions = summary.pop("quarantined_source_groups")
+        summary["quarantine"] = {"count": len(exclusions), "examples": exclusions[:3]}
         print(json.dumps(summary, indent=2))
         annotation("notice", "Public dataset audit", json.dumps(summary))
 

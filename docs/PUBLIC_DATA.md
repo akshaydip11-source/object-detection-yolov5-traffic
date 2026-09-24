@@ -37,15 +37,21 @@ included/exported model files, if any, are not used. The pilot starts from the
    preferentially including up to eight images of each class in each split.
    This deliberately changes prevalence: reported metrics describe this pilot subset,
    not an unbiased estimate of source/population prevalence.
-6. Reject bad boxes, missing/corrupt images, missing classes and byte-identical
-   duplicate selected images. Preserve a per-image source/hash manifest and attribution.
+6. Strict mode rejects bad source boxes. The real archive audit found an invalid
+   annotation in `car100_jpg.rf.4b4550a961f5facc9f19058c674cf2f3.txt`.
+   The pilot now explicitly enables `--quarantine-invalid`: exclude the entire named
+   original-image group, record the label/reason, and abort if more than 5% of groups
+   would be excluded. **No coordinates or class meanings are silently repaired.**
+   Missing/corrupt selected images, missing classes, cross-split named originals and
+   byte-identical duplicate selected images remain blocking. Preserve a per-image
+   source/hash manifest and attribution.
 
 Filename grouping and exact hashes **cannot establish independent cameras/videos**.
 Near-duplicate scenes, incomplete annotations and India-specific domain shift require
 further review. No public-source benchmark score is presented as our model's score.
 
 `python -m training.public_pilot` runs 20 CPU epochs at 320px, validates the selected
-best checkpoint, evaluates the held-out test split, and records aggregate metrics,
+best checkpoint, evaluates validation/test at the API's 640px input size, and records aggregate metrics,
 per-class mAP50–95 and annotated validation batches. It does **not** install the
 checkpoint in `models/`, change Render, or approve operational use. An image-size
 option is now available in the general training CLI; its normal default remains 640px.
@@ -54,9 +60,12 @@ The **Public dataset pilot** GitHub workflow runs only on this session branch wh
 its own workflow/import/pilot files change. It is bounded to 40 minutes, has read-only
 repository permissions, uses a standard CPU runner and retains experimental artifacts
 for 14 days. No GPU or paid service is provisioned. Downloads/results stay outside Git.
-Local direct downloads to the public media host fail TLS in this sandbox, so the
+A hash-keyed CI cache avoids downloading the 502 MB export repeatedly; its contents
+are verified on every import. Native GitHub annotations expose bounded audit errors
+and evaluation summaries without extra write permissions. Local direct downloads to the public media host fail TLS in this sandbox, so the
 first real archive audit/training is performed by that workflow. **At this document's
-initial publication, that run is pending; no trained-model accuracy is claimed.**
+initial publication, the first strict import failed on a source annotation. The
+explicit quarantine retry is pending; no trained-model accuracy is claimed.**
 
 ## Other candidates checked
 

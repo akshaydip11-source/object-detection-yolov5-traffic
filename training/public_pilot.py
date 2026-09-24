@@ -39,13 +39,13 @@ def main():
     evaluations = {}
     for split in ("val", "test"):
         metrics, maps, timings = val.run(
-            data=str(data), weights=str(best), batch_size=16, imgsz=320,
+            data=str(data), weights=str(best), batch_size=16, imgsz=640,
             device="cpu", workers=2, task=split, verbose=True,
             project=str(ROOT / "runs/public-pilot-evaluation"), name=split,
             plots=True,
         )
         evaluations[split] = {
-            "precision": float(metrics[0]), "recall": float(metrics[1]),
+            "image_size": 640, "precision": float(metrics[0]), "recall": float(metrics[1]),
             "mAP50": float(metrics[2]), "mAP50_95": float(metrics[3]),
             "per_class_mAP50_95": dict(zip(["Helmet", "NoHelmet", "LicensePlate"], map(float, maps))),
             "timings_ms": list(map(float, timings)),

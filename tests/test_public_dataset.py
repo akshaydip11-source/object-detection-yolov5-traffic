@@ -78,3 +78,34 @@ def test_selection_deterministic_and_covers_rare_class():
     assert one == public.select_records(list(reversed(records)), 30)
     assert len(one) == 30
     assert all(sum(bool(r["counts"].get(cid)) for r in one) >= 8 for cid in range(3))
+
+
+def test_explicit_quarantine_preserves_valid_annotations(tmp_path, monkeypatch):
+    archive = archive_fixture(tmp_path, monkeypatch)
+    with zipfile.ZipFile(archive, 'a') as z:
+        for i in range(21):
+            image = io.BytesIO()
+            Image.new('RGB', (25, 25), (i, 100, 100)).save(image, format='PNG')
+            stem = f'extra{i}.rf.variant'
+            z.writestr(f'train/images/{stem}.png', image.getvalue())
+            label = '0 0.5 0.5 0.1 0.1\n4 0.5 0.5 0.1 0.1\n1 0.5 0.5 0.1 0.1\n' if i else '0 0 0 1 1\n'
+            z.writestr(f'train/labels/{stem}.txt', label)
+    monkeypatch.setattr(public, 'SOURCE_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())
+    with pytest.raises(DatasetError, match='Invalid source annotation'):
+        public.prepare(archive, tmp_path / 'strict')
+    report = public.prepare(archive, tmp_path / 'quarantine', quarantine_invalid=True)
+    assert len(report['quarantined_source_groups']) == 1
+    assert report['splits']['train']['images'] == 21
+    assert not any('extra0.' in item['source_image'] for item in report['manifest'])
+
+
+def test_excessive_invalid_groups_remain_blocking(tmp_path, monkeypatch):
+    archive = archive_fixture(tmp_path, monkeypatch)
+    with zipfile.ZipFile(archive, 'a') as z:
+        image = io.BytesIO()
+        Image.new('RGB', (24, 24), 'red').save(image, format='PNG')
+        z.writestr('train/images/bad.rf.variant.png', image.getvalue())
+        z.writestr('train/labels/bad.rf.variant.txt', '0 0 0 1 1')
+    monkeypatch.setattr(public, 'SOURCE_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())
+    with pytest.raises(DatasetError, match='5% quarantine limit'):
+        public.prepare(archive, tmp_path / 'prepared', quarantine_invalid=True)

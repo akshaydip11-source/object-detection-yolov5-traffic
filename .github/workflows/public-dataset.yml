@@ -31,8 +31,18 @@ jobs:
       - run: pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
       - run: pip install -r requirements-dev.txt
       - run: pip check && python -m pytest tests/test_public_dataset.py tests/test_dataset.py -q
+      - uses: actions/cache/restore@v5
+        id: public-data-cache
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
       - name: Download pinned public export and validate labels, license and splits
-        run: python -m training.public_dataset --output runs/public-pilot-data
+        run: python -m training.public_dataset --output runs/public-pilot-data --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+      - uses: actions/cache/save@v5
+        if: always() && steps.public-data-cache.outputs.cache-hit != 'true'
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
       - name: Train experimental YOLOv5n and evaluate held-out validation and test data
         run: python -m training.public_pilot
       - run: python -m playwright install --with-deps chromium
@@ -44,7 +54,7 @@ jobs:
           echo "::notice title=Trained-checkpoint browser smoke::Passed actual YOLOv5 pilot checkpoint through HTTP upload, inference, signed JPEG and Chromium rendering. Not accuracy certification."
       - name: Keep reproducible audit and experimental results (never install automatically)
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: public-dataset-pilot
           retention-days: 14
