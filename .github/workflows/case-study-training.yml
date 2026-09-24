@@ -1,0 +1,291 @@
+name: Case-study YOLOv5s training
+# CPU-only GitHub-hosted runner: no GPU is provisioned and no paid compute is used.
+# The training step is wall-clock bounded, so a long run stops instead of being
+# cancelled without results. Evaluation, charts, demo and smokes need the training
+# job always, because a stopped run still leaves best.pt and results.csv behind.
+on:
+  workflow_dispatch:
+    inputs:
+      weights:
+        description: Pretrained COCO initialization for YOLOv5 fine-tuning
+        default: yolov5s.pt
+      img-size:
+        default: '640'
+      epochs:
+        default: '100'
+      batch:
+        default: '16'
+      patience:
+        default: '40'
+      budget-minutes:
+        description: Wall-clock limit for the training step on CPU
+        default: '300'
+      conf-thresholds:
+        description: Confidence thresholds measured on validation and test
+        default: '0.25 0.5 0.65'
+      demo-video-url:
+        default: 'https://upload.wikimedia.org/wikipedia/commons/c/c6/Saigon_traffic-oVbn3HeLDA0.webm'
+      demo-video-license:
+        default: docs/footage/saigon-traffic-credit.txt
+      demo-start:
+        default: '0'
+permissions:
+  contents: read
+concurrency:
+  group: case-study-training
+  cancel-in-progress: false
+env:
+  YOLOv5_AUTOINSTALL: 'false'
+  OMP_NUM_THREADS: '4'
+  MKL_NUM_THREADS: '4'
+  WANDB_MODE: disabled
+  MPLBACKEND: Agg
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      - run: pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/cache/restore@v5
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - run: python -m training.public_dataset --output runs/case-study-source --polygon-boxes --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+      - run: python -m training.export_dataset --data runs/case-study-source/data.yaml --output runs/case-study-dataset
+      - id: train
+        continue-on-error: true
+        name: Fine-tune YOLOv5 on the exported dataset within the CPU time budget
+        run: |
+          set +e
+          timeout "${BUDGET_MINUTES}m" python training/train_yolov5.py \
+            --data runs/case-study-dataset/data.yaml \
+            --weights "$WEIGHTS" \
+            --img-size "$IMG_SIZE" \
+            --epochs "$EPOCHS" \
+            --batch "$BATCH" \
+            --device cpu --workers 2 \
+            --hyp training/hyps/traffic.yaml --seed 0 --patience "$PATIENCE"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+        env:
+          WEIGHTS: ${{ inputs.weights }}
+          IMG_SIZE: ${{ inputs.img-size }}
+          EPOCHS: ${{ inputs.epochs }}
+          BATCH: ${{ inputs.batch }}
+          PATIENCE: ${{ inputs.patience }}
+          BUDGET_MINUTES: ${{ inputs.budget-minutes }}
+      - name: Collect whatever the real run produced
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os, pathlib, shutil
+
+          runs = sorted(pathlib.Path('runs/train').glob('safecity-*'))
+          if not runs:
+              raise SystemExit('Training produced no run directory')
+          run = runs[-1]
+          handoff = pathlib.Path('runs/model-handoff')
+          handoff.mkdir(parents=True, exist_ok=True)
+          kept = []
+          for name in ('weights/best.pt', 'results.csv', 'hyp.yaml', 'opt.yaml', 'training_report.json'):
+              source = run / name
+              if source.is_file():
+                  target = handoff / pathlib.Path(name).name
+                  shutil.copy2(source, target)
+                  kept.append(str(name))
+          report = {
+              'run_directory': str(run),
+              'training_step_outcome': os.environ['TRAIN_OUTCOME'],
+              'training_exit_code': os.environ['TRAIN_EXIT_CODE'],
+              'weights': os.environ['WEIGHTS'],
+              'img_size': int(os.environ['IMG_SIZE']),
+              'epochs_requested': int(os.environ['EPOCHS']),
+              'batch': int(os.environ['BATCH']),
+              'patience': int(os.environ['PATIENCE']),
+              'budget_minutes': int(os.environ['BUDGET_MINUTES']),
+              'device': 'cpu',
+              'files': kept,
+              'completed_training_report': 'training_report.json' in kept,
+              'note': 'Bounded CPU run. If training_report.json is absent the time budget stopped training; best.pt and results.csv still describe the epochs that actually ran.',
+          }
+          (handoff / 'handoff.json').write_text(json.dumps(report, indent=2))
+          print(json.dumps(report, indent=2))
+          PY
+        env:
+          TRAIN_OUTCOME: ${{ steps.train.outcome }}
+          TRAIN_EXIT_CODE: ${{ steps.train.outputs.exit_code }}
+          WEIGHTS: ${{ inputs.weights }}
+          IMG_SIZE: ${{ inputs.img-size }}
+          EPOCHS: ${{ inputs.epochs }}
+          BATCH: ${{ inputs.batch }}
+          PATIENCE: ${{ inputs.patience }}
+          BUDGET_MINUTES: ${{ inputs.budget-minutes }}
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: case-study-model
+          retention-days: 30
+          if-no-files-found: error
+          path: runs/model-handoff/
+  evaluate:
+    needs: train
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      - run: pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/download-artifact@v7
+        with:
+          name: case-study-model
+          path: runs/model-handoff
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/cache/restore@v5
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - run: python -m training.public_dataset --output runs/case-study-source --polygon-boxes --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+      - run: python -m training.export_dataset --data runs/case-study-source/data.yaml --output runs/case-study-dataset
+      - name: Measure validation and test metrics at several confidence thresholds
+        run: |
+          python -m training.evaluate_checkpoint \
+            --weights runs/model-handoff/best.pt \
+            --data runs/case-study-dataset/data.yaml \
+            --img-size "${{ inputs.img-size }}" --batch "${{ inputs.batch }}" --device cpu \
+            --conf ${{ inputs.conf-thresholds }} \
+            --output runs/case-study-evaluation
+      - name: Chart the actual training curves
+        run: python -m training.plot_results --csv runs/model-handoff/results.csv --output runs/case-study-evaluation/charts
+      - name: Download the credited public street footage and record its digest
+        run: |
+          mkdir -p runs/demo
+          curl -sSL --fail --max-time 900 -o runs/demo/source.webm "${{ inputs.demo-video-url }}"
+          python - <<'PY'
+          import hashlib, json, os, pathlib
+
+          path = pathlib.Path('runs/demo/source.webm')
+          with path.open('rb') as stream:
+              digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          credit = pathlib.Path(os.environ['LICENSE_FILE'])
+          provenance = {
+              'source_url': os.environ['VIDEO_URL'],
+              'source_file': path.name,
+              'source_bytes': path.stat().st_size,
+              'source_sha256': digest,
+              'license_file': str(credit),
+              'license_text': credit.read_text(),
+          }
+          pathlib.Path('runs/demo/source_provenance.json').write_text(json.dumps(provenance, indent=2))
+          print(json.dumps(provenance, indent=2))
+          PY
+        env:
+          VIDEO_URL: ${{ inputs.demo-video-url }}
+          LICENSE_FILE: ${{ inputs.demo-video-license }}
+      - name: Transcode the credited source for the detector
+        run: |
+          FFMPEG="$(python -c 'from imageio_ffmpeg import get_ffmpeg_exe; print(get_ffmpeg_exe())')"
+          "$FFMPEG" -nostdin -v error -n -i runs/demo/source.webm -an \
+            -c:v libx264 -threads 2 -pix_fmt yuv420p runs/demo/source.mp4
+      - name: Annotate a continuous 30-second window with the trained checkpoint
+        run: |
+          python - <<'PY'
+          import json, pathlib
+
+          report = json.loads(pathlib.Path('runs/case-study-evaluation/evaluation_report.json').read_text())
+          print('selected_confidence_threshold', report['selected_confidence_threshold'])
+          pathlib.Path('runs/selected-conf.txt').write_text(str(report['selected_confidence_threshold']))
+          PY
+          python -m inference.make_demo \
+            --source runs/demo/source.mp4 \
+            --weights runs/model-handoff/best.pt \
+            --source-license "${{ inputs.demo-video-license }}" \
+            --start "${{ inputs.demo-start }}" \
+            --conf "$(cat runs/selected-conf.txt)" \
+            --output runs/street-demo
+      - name: Report the measured result honestly
+        run: |
+          python - <<'PY'
+          import json, pathlib
+
+          evaluation = json.loads(pathlib.Path('runs/case-study-evaluation/evaluation_report.json').read_text())
+          demo = json.loads(pathlib.Path('runs/street-demo/demo_report.json').read_text())
+          selected = str(evaluation['selected_confidence_threshold'])
+          print('::notice title=Case-study evaluation::' + json.dumps({
+              'checkpoint_sha256': evaluation['checkpoint_sha256'],
+              'selected_confidence_threshold': selected,
+              'validation_mAP50': evaluation['splits']['val'][selected]['mAP50'],
+              'test_mAP50': evaluation['splits']['test'][selected]['mAP50'],
+              'demo_seconds': demo['duration_seconds'],
+              'demo_frames': demo['summary']['frames_processed'],
+          }))
+          print('::notice title=Case-study demo::' + json.dumps({
+              'source_sha256': json.loads(pathlib.Path('runs/demo/source_provenance.json').read_text())['source_sha256'],
+              'offline_frames_per_second': demo['offline_frames_per_second'],
+              'real_time_certified': demo['real_time_certified'],
+              'device': demo['device'],
+          }))
+          PY
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: case-study-results
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            runs/case-study-evaluation/
+            runs/demo/source_provenance.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: case-study-street-demo
+          retention-days: 30
+          if-no-files-found: error
+          path: runs/street-demo/
+  smoke:
+    needs: train
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y libgl1 libglib2.0-0
+      - run: pip install 'torch==2.6.0' 'torchvision==0.21.0' --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements-dev.txt
+      - uses: actions/download-artifact@v7
+        with:
+          name: case-study-model
+          path: runs/model-handoff
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/cache/restore@v5
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - run: python -m training.public_dataset --output runs/case-study-source --polygon-boxes --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+      - run: docker build -t safecity-ci .
+      - name: Real checkpoint in the hardened production container
+        run: |
+          PILOT_CHECKPOINT=runs/model-handoff/best.pt \
+          PILOT_IMAGE="$(find runs/case-study-source/images/test -type f | sort | head -1)" \
+          python -m tests.container_smoke
+          echo "::notice title=Trained-checkpoint container smoke::Case-study checkpoint ran in the non-root, read-only production container. Integration only, not accuracy certification."
+      - run: python -m playwright install --with-deps chromium
+      - name: Real checkpoint through HTTP, API and Chromium
+        run: |
+          PILOT_CHECKPOINT=runs/model-handoff/best.pt \
+          PILOT_IMAGE="$(find runs/case-study-source/images/test -type f | sort | head -1)" \
+          RUN_BROWSER_TESTS=1 python -m pytest tests/test_browser.py::test_browser_actual_yolov5_image_flow -q
+          echo "::notice title=Trained-checkpoint browser smoke::Case-study checkpoint served through the API and Chromium. Integration only, not accuracy certification."

@@ -1,0 +1,26 @@
+Source footage used for the annotated 30-second street demo
+==========================================================
+
+Title:         Saigon traffic (Wikimedia Commons file "Saigon traffic-oVbn3HeLDA0.webm")
+Description:   Motorbike traffic in Go Vap, Ho Chi Minh City (real public street scene)
+Author:        Karel Bilek (own work)
+Source page:   https://commons.wikimedia.org/wiki/File:Saigon_traffic-oVbn3HeLDA0.webm
+Direct file:   https://upload.wikimedia.org/wikipedia/commons/c/c6/Saigon_traffic-oVbn3HeLDA0.webm
+License:       Creative Commons Attribution-Share Alike 4.0 International (CC BY-SA 4.0)
+License URL:   https://creativecommons.org/licenses/by-sa/4.0
+Duration:      46.8 s, 1920x1080, WebM (VP9/Opus); the demo uses a continuous 30 s window.
+
+Derivative licensing
+--------------------
+The annotated demo clip is adapted material under CC BY-SA 4.0 and is distributed
+under the same licence with the attribution above. It must keep this credit with
+the clip. The licence covers the footage itself; it grants no rights over the
+people, vehicles, plate numbers or trademarks visible in it, and it is not
+permission to process anyone's personal data.
+
+Authenticity
+------------
+This is genuine public street video, not stock animation, a looped still, a
+synthetic scene or a re-rendered dataset frame. The detections drawn on it are
+model output on unseen footage and require manual review: a drawn box is not a
+legal finding, an identified person or a verified number plate.

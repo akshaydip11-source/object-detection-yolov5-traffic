@@ -203,3 +203,110 @@ def test_failed_publication_cleans_only_its_new_destination(tmp_path, monkeypatc
         publish_directory(source, output)
     assert not output.exists()
     assert (source / 'file').read_text() == 'original'
+
+
+def _results_csv(path, rows):
+    header = 'epoch,train/box_loss,train/obj_loss,train/cls_loss,metrics/precision,metrics/recall,metrics/mAP_0.5,metrics/mAP_0.5:0.95,x/lr0'
+    path.write_text('\n'.join([header] + rows) + '\n')
+    return path
+
+
+def test_training_curves_are_charted_from_the_runs_own_csv(tmp_path):
+    from training.plot_results import plot, read_results, summarize
+
+    csv = _results_csv(tmp_path / 'results.csv', [
+        '0,0.2,0.15,0.05,0.1,0.2,0.2,0.08,0.01',
+        '1,0.1,0.12,0.03,0.2,0.3,0.5,0.2,0.0098',
+        '2,0.05,0.1,0.02,0.25,0.35,0.4,0.18,0.0096',
+    ])
+    results = read_results(csv)
+    chart = plot(results, tmp_path / 'charts/training_curves.png')
+    summary = summarize(results)
+    assert chart.is_file() and chart.stat().st_size > 0
+    assert summary['epochs_recorded'] == 3
+    assert summary['best_epoch_by_mAP50'] == 1
+    assert summary['best_mAP50'] == 0.5
+    assert summary['first_epoch']['train/box_loss'] == 0.2
+    assert summary['last_epoch']['train/box_loss'] == 0.05
+    assert summary['csv_sha256'] == hashlib.sha256(csv.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('content', [
+    None,
+    '',
+    'epoch,train/box_loss\n0,0.2\n',
+    'epoch,train/box_loss,metrics/mAP_0.5\n0,0.2,0.1\n1,nan,0.2\n',
+])
+def test_no_chart_without_a_real_run_csv(tmp_path, content):
+    from training.plot_results import ResultsError, read_results
+
+    csv = tmp_path / 'results.csv'
+    if content is not None:
+        csv.write_text(content)
+    with pytest.raises(ResultsError):
+        read_results(csv)
+
+
+def test_checkpoint_evaluation_selects_threshold_on_validation_only(small_dataset, tmp_path):
+    from training.evaluate_checkpoint import evaluate
+
+    weights = tmp_path / 'best.pt'
+    weights.write_bytes(b'checkpoint bytes for digest only')
+    calls = []
+    table = {
+        ('val', 0.25): ((0.30, 0.40, 0.35, 0.20), [0.30, 0.40, 0.20]),
+        ('val', 0.5): ((0.50, 0.40, 0.45, 0.25), [0.40, 0.50, 0.30]),
+        ('val', 0.65): ((0.60, 0.20, 0.30, 0.15), [0.50, 0.20, 0.10]),
+        # Test peaks at a different threshold; selection must ignore it.
+        ('test', 0.25): ((0.90, 0.90, 0.95, 0.90), [0.9, 0.9, 0.9]),
+        ('test', 0.5): ((0.40, 0.30, 0.35, 0.20), [0.4, 0.3, 0.2]),
+        ('test', 0.65): ((0.20, 0.10, 0.15, 0.05), [0.2, 0.1, 0.1]),
+    }
+
+    def fake_runner(**kwargs):
+        calls.append((kwargs['task'], kwargs['conf_thres']))
+        metrics, maps = table[(kwargs['task'], kwargs['conf_thres'])]
+        return metrics, maps, (0, 0, 0)
+
+    report = evaluate(
+        weights, small_dataset, img_size=320, batch=4, device='cpu',
+        thresholds=[0.25, 0.5, 0.65], output=tmp_path / 'evaluation', runner=fake_runner,
+    )
+    assert report['selected_confidence_threshold'] == 0.5
+    assert report['test_at_selected_threshold']['mAP50'] == pytest.approx(0.35)
+    assert report['splits']['test']['0.25']['mAP50'] == pytest.approx(0.95)
+    assert report['splits']['val']['0.5']['per_class_mAP50_95'] == {'Helmet': 0.4, 'No_Helmet': 0.5, 'License_Plate': 0.3}
+    assert report['checkpoint_sha256'] == hashlib.sha256(weights.read_bytes()).hexdigest()
+    assert {(split, conf) for split, conf in calls} == {('val', c) for c in (0.25, 0.5, 0.65)} | {('test', c) for c in (0.25, 0.5, 0.65)}
+    assert (tmp_path / 'evaluation/evaluation_report.json').is_file()
+
+
+def test_checkpoint_evaluation_rejects_unusable_arguments(small_dataset, tmp_path):
+    from training.evaluate_checkpoint import evaluate
+
+    weights = tmp_path / 'best.pt'
+    weights.write_bytes(b'checkpoint bytes')
+    runner = lambda **kwargs: ((0.1, 0.1, 0.1, 0.1), [0.1, 0.1, 0.1], (0, 0, 0))
+    with pytest.raises(ValueError, match='Checkpoint missing'):
+        evaluate(tmp_path / 'absent.pt', small_dataset, output=tmp_path / 'a', runner=runner)
+    with pytest.raises(ValueError, match=r'\[0, 1\]'):
+        evaluate(weights, small_dataset, thresholds=[1.5], output=tmp_path / 'b', runner=runner)
+    with pytest.raises(ValueError, match='distinct'):
+        evaluate(weights, small_dataset, thresholds=[0.5, 0.5], output=tmp_path / 'c', runner=runner)
+    with pytest.raises(ValueError, match='multiple of 32'):
+        evaluate(weights, small_dataset, img_size=100, output=tmp_path / 'd', runner=runner)
+
+
+def test_credited_public_footage_matches_the_demo_workflow():
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load((root / '.github/workflows/case-study-training.yml').read_text())
+    dispatch = workflow[True]['workflow_dispatch']['inputs']
+    url = dispatch['demo-video-url']['default']
+    credit_path = root / dispatch['demo-video-license']['default']
+    credit = credit_path.read_text()
+    assert url.startswith('https://upload.wikimedia.org/wikipedia/commons/')
+    assert url in credit and 'CC BY-SA 4.0' in credit and 'Karel Bilek' in credit
+    steps = ''.join(step.get('run', '') for job in workflow['jobs'].values() for step in job['steps'])
+    assert 'install-model' not in steps
+    assert '--device cpu' in steps and 'timeout "${BUDGET_MINUTES}m"' in steps
+    assert '--source-license "${{ inputs.demo-video-license }}"' in steps
