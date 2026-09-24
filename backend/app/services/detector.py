@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import pathlib
 import os
 import sys
@@ -15,6 +15,9 @@ from typing import Any
 # the checkpoint.
 # ---------------------------------------------------------------------------
 
+if os.name == "nt" and hasattr(pathlib, "WindowsPath"):
+    pathlib.PosixPath = pathlib.WindowsPath
+
 if "pathlib._local" not in sys.modules:
     import types
 
@@ -29,12 +32,6 @@ if "pathlib._local" not in sys.modules:
     )
 
     sys.modules["pathlib._local"] = pathlib_local
-
-
-# Windows-only compatibility.
-# This preserves the working behavior on your Lenovo/Windows machine.
-if os.name == "nt" and hasattr(pathlib, "WindowsPath"):
-    pathlib.PosixPath = pathlib.WindowsPath
 
 
 import cv2
