@@ -306,7 +306,15 @@ def test_credited_public_footage_matches_the_demo_workflow():
     credit = credit_path.read_text()
     assert url.startswith('https://upload.wikimedia.org/wikipedia/commons/')
     assert url in credit and 'CC BY-SA 4.0' in credit and 'Karel Bilek' in credit
-    steps = ''.join(step.get('run', '') for job in workflow['jobs'].values() for step in job['steps'])
-    assert 'install-model' not in steps
-    assert '--device cpu' in steps and 'timeout "${BUDGET_MINUTES}m"' in steps
-    assert '--source-license "${{ inputs.demo-video-license }}"' in steps
+    runs = ''.join(step.get('run', '') for job in workflow['jobs'].values() for step in job['steps'])
+    assert 'install-model' not in runs
+    assert '--device cpu' in runs and 'timeout "${BUDGET_MINUTES}m"' in runs
+    assert '--source-license "$LICENSE_FILE"' in runs
+    # A push-triggered run has no dispatch inputs, so shell steps may only read
+    # environment variables that the workflow itself defines with a default.
+    assert '${{ inputs.' not in runs and '${{ github.event.inputs' not in runs
+    assert '${{ secrets.' not in runs
+    environment = workflow['env']
+    for name in ('WEIGHTS', 'IMG_SIZE', 'EPOCHS', 'BATCH', 'PATIENCE', 'BUDGET_MINUTES',
+                 'CONF_THRESHOLDS', 'VIDEO_URL', 'LICENSE_FILE', 'DEMO_START'):
+        assert environment[name], f'{name} needs an input or a default value'
