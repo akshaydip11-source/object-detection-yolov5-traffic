@@ -72,3 +72,8 @@ See [Public data assessment](PUBLIC_DATA.md) for the pinned CC BY 4.0 source,
 explicit label mapping, provenance and the bounded experimental CPU workflow.
 Do not substitute that pilot for independent field validation or install its
 checkpoint automatically. Generated training artifacts are excluded from Git.
+
+The initial CPU pilot and validation-only resolution review have completed.
+[Measured results](TRAINING_RESULTS.md) show insufficient class-specific accuracy,
+so no model is approved for deployment. The notebook is still unexecuted; its
+training results must not be confused with the recorded CPU experiment.

@@ -13,8 +13,10 @@ Its public `/api/health` was inspected and reported:
 {"model_loaded": true, "model_path": "/app/backend/weights/yolo11n.onnx", "model_name": "YOLO11n COCO ONNX fallback"}
 ```
 
-This is not the custom YOLOv5 checkpoint. No `best.pt`, annotated training images,
-labels or completed training metrics were found in the repository. A missing deployed
+This is not the custom YOLOv5 checkpoint. No original `best.pt`, annotated training images,
+labels or completed training metrics were found during the initial repository audit.
+A new experimental public-data model has since been trained; its measured accuracy
+is insufficient for deployment (see the results below). A missing deployed
 artifact does not establish whether the owner trained a model elsewhere.
 Direct POST requests from this sandbox to Render failed TLS, so no successful live
 upload test is claimed. The local tests below use the corrected working copy.
@@ -46,7 +48,7 @@ pretend to be the live Render backend. The same assertion passes on the fix.
 
 ## End-to-end tests actually run
 
-**90 tests passed with browser tests enabled; none skipped.** Chromium 153 runs over
+**99 tests passed with browser tests enabled; none skipped.** Chromium 153 runs over
 real HTTP against an isolated Uvicorn server, not a mocked browser fetch layer.
 Covered flows include:
 
@@ -60,9 +62,10 @@ Covered flows include:
 
 The remaining tests cover API permissions, media ownership, upload/resource limits,
 reports, model integrity/provisioning and dataset validation. Training preflight
-correctly rejects the empty repository dataset. GitHub application CI at `41c1c9a` passed the Docker build, actual container smoke
-and browser checks. Local Docker remains unavailable. Neither live deployment nor
-real-model accuracy is claimed. The added public-data tests use generated fixtures,
+correctly rejects the empty repository dataset. GitHub application CI at `0be27e4` passed the Docker build, actual container smoke
+and browser checks. Local Docker remains unavailable. Live deployment is not claimed. A subsequent public-data training run measured
+poor accuracy and passed trained-checkpoint integration checks; see
+[the actual results](TRAINING_RESULTS.md). The added public-data tests use generated fixtures,
 not actual training images.
 
 ## Training/deployment handoff
@@ -76,7 +79,10 @@ Managed deployments may provision the owner's trusted artifact using HTTPS
 The starting checkout and GitHub main had separate root histories. Both were
 preserved through merge commits on the working branch, along with the newer
 `6f472d6` safety fix. [Draft PR #1](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/pull/1)
-is published; [application CI passed](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35940998455).
+is published; [application CI passed](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35942775787).
 No force-push, overwrite/merge of main, paid provisioning or automatic deployment
 was performed. Public-data selection and the bounded training pilot are documented
-in [PUBLIC_DATA.md](PUBLIC_DATA.md); the pilot has no completed metrics yet.
+in [PUBLIC_DATA.md](PUBLIC_DATA.md). The pilot completed and passed real-model Docker
+and Chromium checks, but initial held-out mAP@0.5 is only **9.27%**.
+[Training results](TRAINING_RESULTS.md) explain why the PR remains draft and the
+experimental checkpoint must not be installed as a production detector.

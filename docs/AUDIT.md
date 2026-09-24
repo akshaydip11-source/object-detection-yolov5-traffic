@@ -1,11 +1,13 @@
 > **Follow-up:** The annotation failure was investigated against the newer GitHub
-> commit `8159a35` and its Render deployment. The corrected code now passes **90
+> commit `8159a35` and its Render deployment. The corrected code now passes **99
 > tests, including all 9 real-browser tests**, with no skips. See
 > [the current investigation](ANNOTATION_FIX.md) for the latest evidence and changes.
 > Browser limitations/counts below describe the earlier audit, not the current run.
 > The original custom checkpoint/data were not supplied; the new public-data pilot
-> is pending and no deployment has been performed. Draft PR #1 is published and application CI at
-> `41c1c9a` passed, including Docker/container/browser checks. Remaining statements
+> has completed but fails accuracy review; no deployment has been performed. Draft PR #1 is published and application CI at
+> `0be27e4` passed, including Docker/container/browser checks. The trained-checkpoint
+> pilot also passed integration but measured only 9.27% test mAP@0.5; see
+> [training results](TRAINING_RESULTS.md). Remaining statements
 > below about unpublished code and unavailable checks are historical.
 
 # Repository and deployment-preparation audit — 2026-09-24

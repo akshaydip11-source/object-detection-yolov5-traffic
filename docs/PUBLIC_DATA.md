@@ -25,7 +25,7 @@ included/exported model files, if any, are not used. The pilot starts from the
 
 ### Import and evaluation policy
 
-`python -m training.public_dataset --output runs/public-pilot-data`:
+`python -m training.public_dataset --output runs/public-pilot-data --polygon-boxes --quarantine-invalid`:
 
 1. Download the pinned export over HTTPS; verify exact length and SHA256.
 2. Require exact reviewed class order and CC BY 4.0 metadata inside the ZIP.
@@ -75,9 +75,10 @@ for 14 days. No GPU or paid service is provisioned. Downloads/results stay outsi
 A hash-keyed CI cache avoids downloading the 502 MB export repeatedly; its contents
 are verified on every import. Native GitHub annotations expose bounded audit errors
 and evaluation summaries without extra write permissions. Local direct downloads to the public media host fail TLS in this sandbox, so the
-first real archive audit/training is performed by that workflow. **At this document's
-initial publication, the first strict import failed on a source annotation. The
-explicit polygon-conversion/quarantine retry is pending; no trained-model accuracy is claimed.**
+first real archive audit/training was performed by that workflow. The final import
+passed, quarantining 31 groups, and training plus trained-checkpoint Docker/browser
+checks completed. However, initial test mAP@0.5 is only **9.27%**. This is an
+experimental model, **not approved for deployment**. See [actual results](TRAINING_RESULTS.md).
 
 ## Other candidates checked
 

@@ -165,13 +165,13 @@ python -m playwright install chromium
 RUN_BROWSER_TESTS=1 python -m pytest tests/test_browser.py -q
 ```
 
-With browser tests enabled: **90 passed, none skipped**. Chromium was installed via
+With browser tests enabled: **99 passed, none skipped**. Chromium was installed via
 an alternate package source after its normal download failed. Browser tests now use
 a real HTTP server and cover images, H.264 video, fake webcam, PDF and result recovery.
 One test runs actual YOLOv5 inference using an **untrained temporary checkpoint**;
-this is not accuracy evidence. GitHub [application CI](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35940998455) passed for commit `41c1c9a`, including Docker/container and browser checks.
+this is not accuracy evidence. GitHub [application CI](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35942775787) passed for commit `0be27e4`, including Docker/container and browser checks.
 The fixes are published in [draft PR #1](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/pull/1); no main merge or deployment has occurred.
-The new [public-data pilot](docs/PUBLIC_DATA.md) remains experimental and must record real results before any accuracy claim. See the [investigation](docs/ANNOTATION_FIX.md).
+The [public-data pilot](docs/PUBLIC_DATA.md) has now trained and passed real-checkpoint Docker/browser smoke tests, but held-out mAP@0.5 is only **9.27%**. **Do not deploy it.** See [actual training results](docs/TRAINING_RESULTS.md). See the [investigation](docs/ANNOTATION_FIX.md).
 
 ```text
 backend/app/      API, permissions, bounded inference, persistence, private media
@@ -179,7 +179,7 @@ frontend/         Same-origin web console and generated synthetic examples
 api/server.py     Deployment entry point
 models/           Supply trusted best.pt locally (ignored)
 yolov5/           Vendored upstream YOLOv5 source/license
-training/         Training helpers (no completed run or metrics supplied)
+training/         Training helpers and experimental public-data pilot (not release-approved)
 dataset/          Three-class layout/config; private dataset files ignored
 deploy/           Caddy reverse-proxy configuration
 scripts/          Environment setup, release check, JS check, local launcher

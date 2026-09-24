@@ -12,7 +12,7 @@ Do not call the application deployment-ready until all applicable checks pass:
 
 The current sandbox cannot supply the missing trained artifact. Docker could not
 be installed here; Chromium was obtained via an alternate package source and the
-browser suite passed. GitHub application CI at `41c1c9a` subsequently passed the
+browser suite passed. GitHub application CI at `0be27e4` subsequently passed the
 Docker build, container smoke and browser checks. No real-host deployment or trained-model
 accuracy sign-off is claimed; see [the current investigation](ANNOTATION_FIX.md).
 
@@ -165,3 +165,10 @@ platform provides TLS; Caddy is for the standalone Compose alternative.
 
 `PORT` is honored by the Python launcher and Docker health check. Real checkpoint
 inference, host permissions, TLS and persistence still need a deployment smoke test.
+
+## Model-quality blocker
+
+The new public-data pilot has passed actual-checkpoint Docker and Chromium smoke
+checks, but its measured accuracy is **not acceptable for release**. Do not install
+its experimental weights merely because CI execution is green. See
+[Training results](TRAINING_RESULTS.md) for the measured failure and remaining gates.
