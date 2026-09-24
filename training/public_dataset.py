@@ -129,18 +129,18 @@ def prepare(archive, output, limits=None, quarantine_invalid=False):
         root = str(PurePosixPath(config_name).parent)
         root = "" if root == "." else root + "/"
         available = {m.filename for m in members}
-        records, groups, manifest, quarantined = {}, {}, [], []
+        records, groups, manifest, quarantined = {}, {}, [], {}
+        visited = set()
         for split, source_split in (("train", "train"), ("val", "valid"), ("test", "test")):
             found = []
             for name in sorted(available):
                 if not name.startswith(root + source_split + "/images/") or PurePosixPath(name).suffix.lower() not in {".jpg", ".jpeg", ".png"}:
                     continue
                 group = source_group(name)
-                if group in groups:
-                    if groups[group] != split:
-                        raise DatasetError("Named original/augmentation crosses published splits: " + group)
+                groups.setdefault(group, set()).add(split)
+                if (split, group) in visited:
                     continue
-                groups[group] = split
+                visited.add((split, group))
                 label = str(PurePosixPath(name.replace("/images/", "/labels/")).with_suffix(".txt"))
                 if label not in available:
                     raise DatasetError("Missing source label: " + label)
@@ -149,13 +149,36 @@ def prepare(archive, output, limits=None, quarantine_invalid=False):
                 except DatasetError as exc:
                     if not quarantine_invalid:
                         raise DatasetError(f"{exc}: {label}") from exc
-                    quarantined.append({"source_group": group, "source_label": label, "reason": str(exc)})
+                    quarantined.setdefault(group, []).append({"source_label": label, "reason": str(exc)})
                     continue
                 found.append({"image": name, "label": label, "group": group, "text": text, "counts": counts})
             records[split] = found
-        if len(quarantined) > len(groups) * 0.05:
-            raise DatasetError(f"Invalid source groups exceed 5% quarantine limit ({len(quarantined)}/{len(groups)}): " + json.dumps(quarantined[:2]))
-        records = {split: select_records(rows, limits[split]) for split, rows in records.items()}
+        for group, splits in groups.items():
+            if len(splits) > 1:
+                if not quarantine_invalid:
+                    raise DatasetError("Named original/augmentation crosses published splits: " + group)
+                quarantined.setdefault(group, []).append({"reason": "Named original crosses published splits", "splits": sorted(splits)})
+        # Exclude whole originals from every split; never move a validation image to train.
+        # Refill deterministically if differently named selected images have identical bytes.
+        while True:
+            if len(quarantined) > len(groups) * 0.05:
+                examples = dict(list(quarantined.items())[:2])
+                raise DatasetError(f"Invalid/conflicting source groups exceed 5% quarantine limit ({len(quarantined)}/{len(groups)}): " + json.dumps(examples))
+            selected = {split: select_records([r for r in rows if r["group"] not in quarantined], limits[split]) for split, rows in records.items()}
+            hashes, duplicates = {}, {}
+            for rows in selected.values():
+                for row in rows:
+                    digest = hashlib.sha256(z.read(row["image"])).hexdigest()
+                    if digest in hashes:
+                        if not quarantine_invalid:
+                            raise DatasetError("Byte-identical duplicate in selected data: " + row["image"])
+                        for record in (row, hashes[digest]):
+                            duplicates[record["group"]] = [{"reason": "Byte-identical selected image", "sha256": digest}]
+                    hashes[digest] = row
+            if not duplicates:
+                records = selected
+                break
+            quarantined.update(duplicates)
         output.mkdir(parents=True)
         hashes = {}
         for split, rows in records.items():
@@ -177,10 +200,10 @@ def prepare(archive, output, limits=None, quarantine_invalid=False):
         data_file = output / "data.yaml"
         data_file.write_text(yaml.safe_dump(data))
         report = validate_dataset(data_file)
-        report["quarantined_source_groups"] = quarantined
+        report["quarantined_source_groups"] = [{"source_group": group, "reasons": reasons} for group, reasons in sorted(quarantined.items())]
         report["attribution"] = ATTRIBUTION
         report["manifest"] = manifest
-        report["source_groups_by_split"] = dict(Counter(groups.values()))
+        report["source_groups_by_split"] = dict(Counter(split for splits in groups.values() for split in splits))
         (output / "provenance.json").write_text(json.dumps(report, indent=2))
         (output / "ATTRIBUTION.md").write_text("# Public pilot dataset\n\n" + "\n\n".join(f"**{k}**: {v}" for k, v in ATTRIBUTION.items()) + "\n")
         return report
@@ -191,8 +214,10 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--archive", type=Path, help="Use an already downloaded, checksum-verified export")
     parser.add_argument("--download-cache", type=Path, help="Cache only the checksum-verified public ZIP for repeated CI audits")
-    parser.add_argument("--quarantine-invalid", action="store_true", help="Explicitly exclude invalid original-image groups, up to 5%; record every exclusion, never repair boxes")
+    parser.add_argument("--quarantine-invalid", action="store_true", help="Explicitly exclude invalid or leaking original-image groups, up to 5%; record every exclusion, never repair boxes")
     args = parser.parse_args()
+    if args.output.exists():
+        parser.error("Output already exists; choose a new directory")
     if args.archive and args.download_cache:
         parser.error("Choose --archive or --download-cache, not both")
     with tempfile.TemporaryDirectory(prefix="safecity-public-") as temp:

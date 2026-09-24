@@ -39,11 +39,14 @@ included/exported model files, if any, are not used. The pilot starts from the
    not an unbiased estimate of source/population prevalence.
 6. Strict mode rejects bad source boxes. The real archive audit found an invalid
    annotation in `car100_jpg.rf.4b4550a961f5facc9f19058c674cf2f3.txt`.
-   The pilot now explicitly enables `--quarantine-invalid`: exclude the entire named
-   original-image group, record the label/reason, and abort if more than 5% of groups
-   would be excluded. **No coordinates or class meanings are silently repaired.**
-   Missing/corrupt selected images, missing classes, cross-split named originals and
-   byte-identical duplicate selected images remain blocking. Preserve a per-image
+   A second audit found `IMG_8615_PNG` in multiple published splits.
+   The pilot explicitly enables `--quarantine-invalid`: exclude the entire named
+   original-image group from **all splits**, record the label/reason, and abort if
+   more than 5% of all groups would be excluded. The same whole-group exclusion
+   applies to byte-identical selected images even when their filenames differ. **No coordinates or class meanings are silently repaired.**
+   Missing/corrupt selected images and missing classes remain blocking. Strict mode
+   still rejects any original-name/byte leakage; quarantine mode removes every
+   member of the conflicting groups rather than moving hold-out images into training. Preserve a per-image
    source/hash manifest and attribution.
 
 Filename grouping and exact hashes **cannot establish independent cameras/videos**.

@@ -109,3 +109,44 @@ def test_excessive_invalid_groups_remain_blocking(tmp_path, monkeypatch):
     monkeypatch.setattr(public, 'SOURCE_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())
     with pytest.raises(DatasetError, match='5% quarantine limit'):
         public.prepare(archive, tmp_path / 'prepared', quarantine_invalid=True)
+
+
+def test_quarantine_removes_leaking_group_from_every_split(tmp_path, monkeypatch):
+    archive = archive_fixture(tmp_path, monkeypatch)
+    with zipfile.ZipFile(archive, 'a') as z:
+        for i in range(21):
+            image = io.BytesIO()
+            Image.new('RGB', (25, 25), (i, 100, 100)).save(image, format='PNG')
+            stem = f'extra{i}.rf.variant'
+            text = '0 0.5 0.5 0.1 0.1\n4 0.5 0.5 0.1 0.1\n1 0.5 0.5 0.1 0.1\n'
+            z.writestr(f'train/images/{stem}.png', image.getvalue())
+            z.writestr(f'train/labels/{stem}.txt', text)
+            if i == 0:
+                z.writestr('test/images/extra0.rf.other.png', image.getvalue())
+                z.writestr('test/labels/extra0.rf.other.txt', text)
+    monkeypatch.setattr(public, 'SOURCE_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())
+    report = public.prepare(archive, tmp_path / 'prepared', quarantine_invalid=True)
+    assert len(report['quarantined_source_groups']) == 1
+    assert all(item['source_group'] != 'extra0' for item in report['manifest'])
+    assert report['splits']['test']['images'] == 1
+
+
+def test_quarantine_removes_differently_named_byte_duplicates(tmp_path, monkeypatch):
+    archive = archive_fixture(tmp_path, monkeypatch)
+    with zipfile.ZipFile(archive, 'a') as z:
+        for i in range(41):
+            image = io.BytesIO()
+            Image.new('RGB', (25, 25), (i, 100, 100)).save(image, format='PNG')
+            stem = f'extra{i}.rf.variant'
+            text = '0 0.5 0.5 0.1 0.1\n4 0.5 0.5 0.1 0.1\n1 0.5 0.5 0.1 0.1\n'
+            z.writestr(f'train/images/{stem}.png', image.getvalue())
+            z.writestr(f'train/labels/{stem}.txt', text)
+            if i == 0:
+                z.writestr('test/images/renamed.rf.other.png', image.getvalue())
+                z.writestr('test/labels/renamed.rf.other.txt', text)
+    monkeypatch.setattr(public, 'SOURCE_SHA256', hashlib.sha256(archive.read_bytes()).hexdigest())
+    with pytest.raises(DatasetError, match='Byte-identical duplicate'):
+        public.prepare(archive, tmp_path / 'strict')
+    report = public.prepare(archive, tmp_path / 'prepared', quarantine_invalid=True)
+    assert {item['source_group'] for item in report['quarantined_source_groups']} == {'extra0', 'renamed'}
+    assert all(item['source_group'] not in {'extra0', 'renamed'} for item in report['manifest'])
