@@ -1,18 +1,29 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.27.0
-python-multipart>=0.0.9
-aiofiles>=23.2.1
-sqlalchemy>=2.0.25
-pydantic-settings>=2.1.0
-pillow>=10.2.0
-numpy>=1.26.0
-opencv-python-headless>=4.8.0
-onnxruntime>=1.16.0
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
-bcrypt<4.1
-httpx>=0.26.0
-reportlab>=4.0.0
-jinja2>=3.1.0
-itsdangerous>=2.1.0
-email-validator>=2.1.0
+# Application runtime. Install matching CPU torch/torchvision first (see README).
+fastapi>=0.115.6,<1
+uvicorn[standard]>=0.34,<1
+python-multipart>=0.0.22,<1
+sqlalchemy>=2.0.36,<3
+pydantic-settings>=2.7,<3
+pillow>=11.1,<13
+numpy>=1.26,<3
+opencv-python>=4.10,<5
+python-jose[cryptography]>=3.4,<4
+bcrypt>=4.2,<6
+reportlab>=4.3,<5
+email-validator>=2.2,<3
+# Vendored YOLOv5 imports Ultralytics helpers, not the YOLO11 inference API.
+torch>=2.6,<3
+torchvision>=0.21,<1
+ultralytics>=8.4.132,<9
+ultralytics-thop>=2.1.6,<3
+matplotlib>=3.8,<4
+psutil>=5.9,<8
+PyYAML>=6.0.2,<7
+requests>=2.32.3,<3
+scipy>=1.11,<2
+pandas>=2.1,<4
+seaborn>=0.13,<1
+packaging>=24,<27
+setuptools>=70
+# Bundled FFmpeg for browser-compatible H.264 annotated videos.
+imageio-ffmpeg>=0.6,<0.7

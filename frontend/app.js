@@ -2,23 +2,28 @@
 const API = "/api";
 
 const SafeCity = {
+  escape(value) {
+    return String(value ?? "").replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  },
   token() {
-    return localStorage.getItem("sc_token") || "";
+    return sessionStorage.getItem("sc_token") || "";
   },
   user() {
     try {
-      return JSON.parse(localStorage.getItem("sc_user") || "null");
+      return JSON.parse(sessionStorage.getItem("sc_user") || "null");
     } catch {
       return null;
     }
   },
   setAuth(token, user) {
-    localStorage.setItem("sc_token", token);
-    localStorage.setItem("sc_user", JSON.stringify(user));
+    sessionStorage.setItem("sc_token", token);
+    sessionStorage.setItem("sc_user", JSON.stringify(user));
   },
   logout() {
-    localStorage.removeItem("sc_token");
-    localStorage.removeItem("sc_user");
+    sessionStorage.removeItem("sc_token");
+    sessionStorage.removeItem("sc_user");
     window.location.href = "/login";
   },
   headers(json = true) {
@@ -34,7 +39,7 @@ const SafeCity = {
       headers: { ...this.headers(!(opts.body instanceof FormData)), ...(opts.headers || {}) },
     });
     if (res.status === 401) {
-      // don't force logout on optional endpoints
+      if (path !== "/auth/login") this.logout();
       const err = await res.json().catch(() => ({ detail: "Unauthorized" }));
       throw Object.assign(new Error(err.detail || "Unauthorized"), { status: 401 });
     }
@@ -62,10 +67,10 @@ const SafeCity = {
     setTimeout(() => el.remove(), 3800);
   },
   badgeStatus(s) {
-    return `<span class="badge badge-${s}">${s}</span>`;
+    return `<span class="badge badge-${this.escape(s)}">${this.escape(s)}</span>`;
   },
   badgeSev(s) {
-    return `<span class="badge badge-${s}">${s}</span>`;
+    return `<span class="badge badge-${this.escape(s)}">${this.escape(s)}</span>`;
   },
   fmtMs(ms) {
     if (ms == null) return "—";
@@ -86,17 +91,7 @@ const SafeCity = {
     return `₹${Number(n || 0).toLocaleString("en-IN")}`;
   },
   violationLabel(t) {
-    const map = {
-      no_helmet: "No Helmet",
-      no_seatbelt: "No Seatbelt",
-      triple_riding: "Triple Riding",
-      overcrowded_vehicle: "Overcrowded",
-      red_light_suspect: "Red Light",
-      stop_sign_suspect: "Stop Sign",
-      unattended_child_proxy: "VRU Alert",
-      high_risk_cluster: "Risk Cluster",
-    };
-    return map[t] || t;
+    return this.escape(t === "no_helmet" ? "No Helmet — Review" : t);
   },
   requireAuth(redirect = true) {
     if (!this.token()) {
@@ -120,20 +115,34 @@ const SafeCity = {
       .toUpperCase();
     el.innerHTML = `
       <div class="user-chip">
-        <div class="user-avatar">${initials}</div>
+        <div class="user-avatar">${this.escape(initials)}</div>
         <div>
-          <div style="color:var(--text);font-weight:600;font-size:.85rem">${u.full_name || ""}</div>
-          <div style="font-size:.7rem">${u.role}</div>
+          <div style="color:var(--text);font-weight:600;font-size:.85rem">${this.escape(u.full_name || "")}</div>
+          <div style="font-size:.7rem">${this.escape(u.role)}</div>
         </div>
         <button class="btn btn-sm btn-ghost" id="logoutBtn" title="Logout">⎋</button>
       </div>`;
     el.querySelector("#logoutBtn")?.addEventListener("click", () => this.logout());
+  },
+  async download(path, filename) {
+    const response = await this.api(path);
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   },
   async refreshMe() {
     if (!this.token()) return null;
     try {
       const me = await this.api("/auth/me");
       this.setAuth(this.token(), me);
+      if (!["admin", "officer"].includes(me.role)) {
+        document.querySelectorAll('a[href="/dashboard"], a[href="/violations"]').forEach(link => { link.hidden = true; });
+      }
       return me;
     } catch {
       return null;
@@ -160,3 +169,24 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 window.SafeCity = SafeCity;
+
+// Display readiness on operational pages without promising a working detector.
+document.addEventListener("DOMContentLoaded", async () => {
+  if (location.pathname.replace(/\.html$/, "") !== "/live") return;
+  try {
+    const health = await SafeCity.api("/health");
+    if (!health.model_loaded) SafeCity.toast("Model unavailable: provide trusted models/best.pt and restart the server.", "err");
+  } catch { SafeCity.toast("API unavailable", "err"); }
+});
+
+// Server authorization is authoritative; this guard only improves navigation.
+const protectedPage = location.pathname.replace(/\.html$/, "");
+if (["/app", "/live", "/dashboard", "/violations"].includes(protectedPage)) {
+  SafeCity.requireAuth();
+  SafeCity.refreshMe().then(user => {
+    if (!user) return;
+    if (["/dashboard", "/violations"].includes(protectedPage) && !["officer", "admin"].includes(user.role)) {
+      window.location.replace("/app");
+    }
+  });
+}

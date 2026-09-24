@@ -149,56 +149,60 @@
     }
     document.getElementById("stopBtn").addEventListener("click", stopAll);
 
+    let inFlight = false;
     async function captureAndDetect() {
-      if (!stream) return;
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth || 640;
-      canvas.height = video.videoHeight || 480;
-      const ctx = canvas.getContext("2d");
-      ctx.drawImage(video, 0, 0);
-      const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
-      if (!blob) throw new Error("Capture failed");
-
-      document.getElementById("loading").classList.remove("hidden");
-      document.getElementById("status").textContent = "Inferencing…";
-
-      const fd = new FormData();
-      fd.append("file", blob, "frame.jpg");
-      fd.append("conf_threshold", conf.value);
-      fd.append("camera_id", "CAM-LIVE");
-      fd.append("location", "Live Webcam");
-      fd.append("create_tickets", document.getElementById("tickets").value);
-
+      if (!stream || inFlight) return;
+      inFlight = true;
       try {
-        const res = await fetch(`${API}/detect/frame`, {
-          method: "POST",
-          headers: SafeCity.token() ? { Authorization: `Bearer ${SafeCity.token()}` } : {},
-          body: fd,
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ detail: res.statusText }));
-          throw new Error(err.detail || "Failed");
+        const canvas = document.createElement("canvas");
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(video, 0, 0);
+        const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
+        if (!blob) throw new Error("Capture failed");
+
+        document.getElementById("loading").classList.remove("hidden");
+        document.getElementById("status").textContent = "Inferencing…";
+
+        const fd = new FormData();
+        fd.append("file", blob, "frame.jpg");
+        fd.append("conf_threshold", conf.value);
+        fd.append("camera_id", "CAM-LIVE");
+        fd.append("location", "Live Webcam");
+        fd.append("create_tickets", document.getElementById("tickets").value);
+
+        try {
+          const res = await fetch(`${API}/detect/frame`, {
+            method: "POST",
+            headers: SafeCity.token() ? { Authorization: `Bearer ${SafeCity.token()}` } : {},
+            body: fd,
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: res.statusText }));
+            throw new Error(err.detail || "Failed");
+          }
+          const data = await res.json();
+          if (data.result_url) {
+            overlay.src = data.result_url;
+            overlay.classList.remove("hidden");
+          }
+          document.getElementById("sObj").textContent = data.object_count;
+          document.getElementById("sViol").textContent = data.violation_count;
+          document.getElementById("sMs").textContent = SafeCity.fmtMs(data.processing_ms);
+          document.getElementById("status").textContent = data.violation_count
+            ? `${data.violation_count} review observation(s)`
+            : "No flags above threshold";
+          const list = document.getElementById("detList");
+          list.innerHTML = (data.detections || []).slice(0, 20).map((d) => `
+            <div class="det-item ${d.is_violation ? "viol" : ""}">
+              <div class="name">${d.is_violation ? "⚠ " : ""}${SafeCity.escape(d.class_name)}</div>
+              <div style="font-family:var(--mono)">${(d.confidence*100).toFixed(0)}%</div>
+            </div>`).join("") || `<div class="empty-state" style="padding:1rem">No objects</div>`;
+        } finally {
+          document.getElementById("loading").classList.add("hidden");
         }
-        const data = await res.json();
-        if (data.result_url) {
-          overlay.src = data.result_url + "?t=" + Date.now();
-          overlay.classList.remove("hidden");
-        }
-        document.getElementById("sObj").textContent = data.object_count;
-        document.getElementById("sViol").textContent = data.violation_count;
-        document.getElementById("sMs").textContent = SafeCity.fmtMs(data.processing_ms);
-        document.getElementById("status").textContent = data.violation_count
-          ? `${data.violation_count} violation(s) flagged`
-          : "Clear — no violations";
-        const list = document.getElementById("detList");
-        list.innerHTML = (data.detections || []).slice(0, 20).map((d) => `
-          <div class="det-item ${d.is_violation ? "viol" : ""}">
-            <div class="name">${d.is_violation ? "⚠ " : ""}${d.class_name}</div>
-            <div style="font-family:var(--mono)">${(d.confidence*100).toFixed(0)}%</div>
-          </div>`).join("") || `<div class="empty-state" style="padding:1rem">No objects</div>`;
-      } finally {
-        document.getElementById("loading").classList.add("hidden");
-      }
+      } finally { inFlight = false; }
     }
 
     document.getElementById("snapBtn").addEventListener("click", () => {

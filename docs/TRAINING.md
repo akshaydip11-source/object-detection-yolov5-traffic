@@ -1,80 +1,67 @@
-# Training custom SafeCityAI weights (Helmet / NoHelmet / Plate)
+# Custom YOLOv5 training, evaluation and installation
 
-This product ships with **YOLO11n COCO ONNX** + a violation heuristic layer so demos work immediately.
-For production helmet/seatbelt accuracy, fine-tune on your annotated traffic dataset.
+The dataset and trained checkpoint are not in this repository. The pipeline and
+unexecuted [Colab notebook](../training/safecityai_yolov5_training.ipynb) are ready for
+actual data; they are not evidence of completed training or acceptable accuracy.
 
-## 1. Dataset
+## Dataset
 
-Classes recommended:
+Expected label IDs: **0 Helmet, 1 NoHelmet, 2 LicensePlate**. `No_Helmet` and
+`License_Plate` are accepted name spellings, but IDs must still match their labels.
+Use `images/{train,val}` and parallel `labels/{train,val}` directories with normalized
+YOLO boxes (`class_id center_x center_y width height`). Empty TXT files are valid
+negative examples. Every class needs examples in both train and validation.
 
-```
-0 Helmet
-1 NoHelmet
-2 Seatbelt
-3 NoSeatbelt
-4 LicensePlate
-5 Motorcycle
-6 Car
-7 Person
-```
+Split by recording/scene before extracting frames; also retain unseen test data.
+Confirm privacy and image/annotation licensing before using or sharing the data.
+`dataset/traffic.yaml` uses `path: ../dataset`, resolved relative to the vendored
+YOLOv5 root. For an external dataset, supply `--data /path/to/config.yaml` and use an
+absolute `path:`. Keep all private dataset files out of Git.
 
-- Collect 200–500+ frames from CCTV / dashcam
-- Annotate with [Roboflow](https://roboflow.com) or LabelImg
-- Export **YOLOv8** format (images + `.txt` labels)
-- Apply flip / brightness / mosaic augmentation
-
-`data/traffic.yaml` example:
-
-```yaml
-path: /datasets/traffic
-train: images/train
-val: images/val
-names:
-  0: Helmet
-  1: NoHelmet
-  2: Seatbelt
-  3: NoSeatbelt
-  4: LicensePlate
-  5: Motorcycle
-  6: Car
-  7: Person
-```
-
-## 2. Train (Ultralytics)
+## Validate before training
 
 ```bash
-pip install ultralytics
-yolo detect train model=yolo11n.pt data=traffic.yaml epochs=50 imgsz=640 batch=16
+python training/train_yolov5.py --validate-only
+# Or an external labeled dataset:
+python training/train_yolov5.py --data /path/to/traffic.yaml --validate-only
 ```
 
-Monitor **mAP@0.5** in `runs/detect/train/results.csv`.
+Validation rejects missing/corrupt images, missing/orphan labels, invalid/out-of-bounds
+boxes, missing classes and byte-identical train/validation leakage. It reports counts
+and a dataset fingerprint. Near-duplicate frames still require a proper source split;
+byte checks cannot prove absence of all leakage.
 
-## 3. Export ONNX
+## Train and evaluate (GPU recommended)
 
 ```bash
-yolo export model=runs/detect/train/weights/best.pt format=onnx opset=12
-cp runs/detect/train/weights/best.onnx backend/weights/yolo11n.onnx
+python training/train_yolov5.py --epochs 50 --batch 16 --device 0 --install-model
 ```
 
-Update `backend/weights/coco.names` (or a new names file) to match your classes, and
-adjust `PERSON` / `MOTORCYCLE` / violation maps in `backend/app/services/detector.py`.
+Use `--device cpu` only if you accept a slower run; no GPU speed is claimed. The
+script starts from YOLOv5s pretrained initialization (`--weights` is configurable),
+trains on your labels, then runs `yolov5/val.py` on the resulting best checkpoint.
+Unique output folders under `runs/train/safecity-*` and `runs/val/safecity-*` contain
+the actual CSV, plots, checkpoint and validation outputs. `training_report.json`
+records data counts/fingerprint, commands, environment versions and output paths.
 
-## 4. Evaluate
+`--install-model` copies the evaluated checkpoint to `models/best.pt`. It refuses to
+replace an existing model unless `--overwrite-model` is explicitly supplied. Back up
+old weights before replacing them. A successful run does **not** prove sufficient
+accuracy: inspect actual mAP@0.5, mAP@0.5:0.95, per-class precision/recall, losses and
+confusion matrices against the internship requirements. Do not invent metrics.
+
+## Validate the API handoff
 
 ```bash
-yolo detect val model=best.pt data=traffic.yaml
-# Video demo
-yolo detect predict model=best.pt source=test_street.mp4 conf=0.5
+python -m scripts.verify_release --image /path/to/heldout.jpg --video /path/to/heldout.mp4
 ```
 
-## 5. API contract (unchanged)
+Inspect the ignored `outputs/release-check/` annotations/report, record SHA-256 and
+compare outputs against the known-good Postman-tested backend. Test all three
+classes, negative cases, multiple objects and different aspect ratios. Restart the
+API after replacing its model; then verify health/readiness, sign-in, image/video/
+webcam, signed media and reports in the browser.
 
-```json
-{
-  "class_name": "NoHelmet",
-  "confidence": 0.88,
-  "box": { "x1": 100, "y1": 200, "x2": 150, "y2": 260 },
-  "is_violation": true,
-  "violation_type": "no_helmet"
-}
-```
+**No ONNX export is needed for this backend.** Do not use a YOLOv8/11 export command
+as a substitute for YOLOv5 training. Share the trusted best.pt separately, not through
+Git; managed hosts may use the explicit HTTPS MODEL_URL + MODEL_SHA256 mechanism.

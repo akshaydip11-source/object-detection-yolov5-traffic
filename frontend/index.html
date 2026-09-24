@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>SafeCityAI — AI Traffic Rule Enforcement</title>
-  <meta name="description" content="SafeCityAI automatically detects helmet, seatbelt, and traffic violations from CCTV using YOLO object detection." />
+  <meta name="description" content="Custom YOLOv5 internship demo for Helmet, NoHelmet and LicensePlate detection." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
@@ -36,14 +36,14 @@
     <section class="hero">
       <div class="container hero-grid">
         <div>
-          <div class="eyebrow"><span class="dot"></span> Live in production · Kolkata traffic units</div>
+          <div class="eyebrow"><span class="dot"></span> Internship prototype · Custom weights required</div>
           <h1>
-            Automate traffic enforcement with
+            Review traffic images with
             <span class="grad">YOLO vision AI</span>
           </h1>
           <p class="hero-lead">
-            SafeCityAI watches CCTV so officers don’t have to. Detect helmet &amp; seatbelt violations,
-            triple-riding, and junction risks in real time — then issue digital challans from one console.
+            Upload images, clips or browser webcam frames to detect Helmet, NoHelmet and LicensePlate
+            with your custom YOLOv5 checkpoint. Every flag needs human review.
           </p>
           <div class="hero-actions">
             <a class="btn btn-primary btn-lg" href="/app">Try detection free →</a>
@@ -51,16 +51,16 @@
           </div>
           <div class="hero-stats">
             <div>
-              <strong>&lt;200ms</strong>
-              <span>typical frame latency</span>
+              <strong>Measured</strong>
+              <span>per-job latency</span>
             </div>
             <div>
-              <strong>8+</strong>
-              <span>violation classes</span>
+              <strong>3</strong>
+              <span>custom classes</span>
             </div>
             <div>
-              <strong>24/7</strong>
-              <span>camera monitoring</span>
+              <strong>Review</strong>
+              <span>before any action</span>
             </div>
           </div>
         </div>
@@ -69,29 +69,29 @@
           <div class="scan-line"></div>
           <div class="detection-demo">
             <div class="bbox veh" style="left:12%;top:42%;width:38%;height:32%;">
-              <span>car 0.91</span>
+              <span>LicensePlate 0.91</span>
             </div>
             <div class="bbox bad" style="left:22%;top:38%;width:14%;height:28%;">
-              <span>⚠ no_seatbelt 0.84</span>
+              <span>Helmet 0.84</span>
             </div>
             <div class="bbox veh" style="left:58%;top:48%;width:28%;height:26%;">
-              <span>motorcycle 0.88</span>
+              <span>LicensePlate 0.88</span>
             </div>
             <div class="bbox bad" style="left:64%;top:40%;width:12%;height:24%;">
               <span>⚠ no_helmet 0.79</span>
             </div>
             <div class="bbox ok" style="left:78%;top:28%;width:8%;height:18%;">
-              <span>traffic light 0.93</span>
+              <span>Helmet 0.93</span>
             </div>
           </div>
           <div class="demo-hud">
             <div>
-              <div class="live-pill"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:#34d399;display:inline-block"></span> INFERENCE LIVE</div>
-              <div style="margin-top:.4rem">CAM-02 · Park Street Junction</div>
+              <div class="live-pill"><span class="dot" style="width:6px;height:6px;border-radius:50%;background:#34d399;display:inline-block"></span> ILLUSTRATIVE MOCKUP</div>
+              <div style="margin-top:.4rem">Not a live camera feed</div>
             </div>
             <div style="text-align:right">
               <div>objects: 5</div>
-              <div style="color:#f87171">violations: 2</div>
+              <div style="color:#f87171">review flags: 1</div>
             </div>
           </div>
         </div>
@@ -101,28 +101,28 @@
     <div class="metrics-band">
       <div class="container metrics">
         <div><strong>mAP@0.5</strong><span>primary training metric</span></div>
-        <div><strong>YOLOv8/11</strong><span>ONNX runtime edge-ready</span></div>
+        <div><strong>YOLOv5</strong><span>custom PyTorch checkpoint</span></div>
         <div><strong>REST API</strong><span>image · video · live frame</span></div>
-        <div><strong>E-Challan</strong><span>PDF tickets + CSV export</span></div>
+        <div><strong>Review records</strong><span>PDF tickets + CSV export</span></div>
       </div>
     </div>
 
     <section id="features">
       <div class="container">
         <div class="section-head">
-          <h2>Everything a smart-city traffic unit needs</h2>
-          <p>From raw CCTV frames to enforceable tickets — built as a complete product, not a notebook demo.</p>
+          <h2>A traffic detection internship demo</h2>
+          <p>From uploaded frames to model predictions and illustrative review records. Not a production enforcement system.</p>
         </div>
         <div class="features">
           <article class="feature-card">
             <div class="feature-icon">🎯</div>
             <h3>YOLO object detection</h3>
-            <p>State-of-the-art single-shot detection for vehicles, riders, pedestrians, lights and signs with confidence scoring &amp; NMS.</p>
+            <p>Custom Helmet, NoHelmet and LicensePlate detection with confidence scoring and class-aware NMS.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">🪖</div>
-            <h3>Helmet &amp; seatbelt logic</h3>
-            <p>Violation engine maps detections to no-helmet, no-seatbelt, triple-riding and junction risks with configurable fines.</p>
+            <h3>NoHelmet review flags</h3>
+            <p>Only the learned NoHelmet class creates a review flag. No seatbelt, signal, OCR or triple-riding inference is claimed.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">📹</div>
@@ -132,12 +132,12 @@
           <article class="feature-card">
             <div class="feature-icon">🧾</div>
             <h3>Digital challan workflow</h3>
-            <p>Open → review → issue → paid. Generate PDF notices and export CSV for records &amp; court evidence packs.</p>
+            <p>Illustrative review workflow, PDF records and CSV exports. No legal enforcement or payment processing.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">📊</div>
             <h3>Ops dashboard</h3>
-            <p>City-wide stats, daily trends, top hotspots, camera health, and officer activity in one control room view.</p>
+            <p>Stored job counts, review records and daily trends. Optional camera labels are demo data, not connected CCTV.</p>
           </article>
           <article class="feature-card">
             <div class="feature-icon">🔐</div>
@@ -152,7 +152,7 @@
       <div class="container">
         <div class="section-head">
           <h2>How SafeCityAI works</h2>
-          <p>Four phases from the original YOLOv5 traffic project — now productized end-to-end.</p>
+          <p>A custom-model workflow with explicit validation and review.</p>
         </div>
         <div class="steps">
           <div class="step">
@@ -161,15 +161,15 @@
           </div>
           <div class="step">
             <h3>Detect</h3>
-            <p>YOLO11n ONNX runs letterbox → inference → class-wise NMS with tunable confidence.</p>
+            <p>YOLOv5 best.pt runs preprocessing, inference and class-wise NMS with tunable confidence.</p>
           </div>
           <div class="step">
             <h3>Enforce</h3>
-            <p>Heuristics + custom classes flag helmet, seatbelt, triple-riding &amp; signal risks.</p>
+            <p>NoHelmet predictions are flagged for manual review; detections are not proof of an offence.</p>
           </div>
           <div class="step">
             <h3>Act</h3>
-            <p>Tickets land in the queue. Officers review, issue PDF challans, and track payment.</p>
+            <p>Signed-in demo officers may save image review records and export illustrative PDFs.</p>
           </div>
         </div>
       </div>
@@ -186,7 +186,7 @@
           <span class="chip-arrow">→</span>
           <span class="chip">OpenCV decode</span>
           <span class="chip-arrow">→</span>
-          <span class="chip hl">YOLO11n ONNX</span>
+          <span class="chip hl">Custom YOLOv5</span>
           <span class="chip-arrow">→</span>
           <span class="chip">NMS + IoU</span>
           <span class="chip-arrow">→</span>
@@ -197,7 +197,7 @@
         <div style="margin-top:2.5rem" class="grid-3">
           <div class="card">
             <div class="card-title">Model</div>
-            <p style="font-size:.9rem;color:var(--text-muted)">YOLO11n (nano) via ONNX Runtime — edge-friendly, CPU inference, deployment-ready <code style="color:var(--accent)">best.pt</code> swap-in for custom traffic weights.</p>
+            <p style="font-size:.9rem;color:var(--text-muted)">Local YOLOv5 source with PyTorch CPU inference. Provide your trusted <code style="color:var(--accent)">best.pt</code> checkpoint; no fallback weights are included.</p>
           </div>
           <div class="card">
             <div class="card-title">Metrics</div>
@@ -205,7 +205,7 @@
           </div>
           <div class="card">
             <div class="card-title">API contract</div>
-            <p style="font-size:.9rem;color:var(--text-muted);font-family:var(--mono);font-size:.78rem">{"class":"no_helmet","confidence":0.88,"box":[x1,y1,x2,y2]}</p>
+            <p style="font-size:.9rem;color:var(--text-muted);font-family:var(--mono);font-size:.78rem">{"class_name":"NoHelmet","confidence":0.88,"box":{"x1":10,"y1":20,"x2":50,"y2":80}}</p>
           </div>
         </div>
       </div>
@@ -214,7 +214,7 @@
     <section>
       <div class="container">
         <div class="cta-box">
-          <h2>Ready to watch the city for you?</h2>
+          <h2>Ready to test your custom model?</h2>
           <p>Open the detection console, drop a traffic image, and get annotated violations in seconds.</p>
           <div style="display:flex;gap:.75rem;justify-content:center;flex-wrap:wrap">
             <a class="btn btn-primary btn-lg" href="/app">Open detection console</a>

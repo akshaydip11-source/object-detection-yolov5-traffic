@@ -1,3 +1,6 @@
-# Colab helper: run cells from the notebook/template as needed.
-# The authoritative training command is documented in train_yolov5.py.
-print("Use Google Colab with GPU, clone YOLOv5, upload/export the annotated dataset, then train with YOLOv5s.")
+"""Print Colab setup guidance; this is not a training notebook or evidence of a run."""
+
+from pathlib import Path
+
+if __name__ == "__main__":
+    print((Path(__file__).resolve().parents[1] / "docs" / "TRAINING.md").read_text())

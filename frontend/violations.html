@@ -144,7 +144,7 @@
         const meta = await SafeCity.api("/meta/violation-types");
         const sel = document.getElementById("fType");
         sel.innerHTML = `<option value="">All</option>` + meta.types.map((t) =>
-          `<option value="${t.id}">${t.label}</option>`).join("");
+          `<option value="${SafeCity.escape(t.id)}">${SafeCity.escape(t.label)}</option>`).join("");
       } catch {}
     }
 
@@ -168,7 +168,7 @@
           <td><code style="color:var(--accent)">${v.ticket_id}</code></td>
           <td>${SafeCity.violationLabel(v.violation_type)}</td>
           <td>${SafeCity.badgeSev(v.severity)}</td>
-          <td>${v.camera_id}</td>
+          <td>${SafeCity.escape(v.camera_id)}</td>
           <td>${SafeCity.money(v.fine_amount)}</td>
           <td>${SafeCity.badgeStatus(v.status)}</td>
           <td>${SafeCity.fmtDate(v.created_at)}</td>
@@ -223,6 +223,13 @@
       }
     });
 
+    document.getElementById("pdfBtn").addEventListener("click", async (event) => {
+      event.preventDefault();
+      if (!selected) return;
+      try { await SafeCity.download(`/violations/${selected.ticket_id}/pdf`, `${selected.ticket_id}.pdf`); }
+      catch (e) { SafeCity.toast(e.message, "err"); }
+    });
+
     document.getElementById("exportBtn").addEventListener("click", async () => {
       if (!SafeCity.token()) {
         SafeCity.toast("Sign in to export CSV", "err");
@@ -230,13 +237,7 @@
         return;
       }
       try {
-        const res = await fetch("/api/export/violations.csv", { headers: SafeCity.headers(false) });
-        if (!res.ok) throw new Error("Export failed");
-        const blob = await res.blob();
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = "safecity_violations.csv";
-        a.click();
+        await SafeCity.download("/export/violations.csv", "safecity_violations.csv");
         SafeCity.toast("CSV downloaded");
       } catch (e) {
         SafeCity.toast(e.message, "err");

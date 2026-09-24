@@ -1,9 +1,7 @@
 from datetime import datetime
-from sqlalchemy import (
-    String, Integer, Float, Boolean, DateTime, Text, ForeignKey, JSON
-)
+from sqlalchemy import String, Integer, Float, Boolean, DateTime, Text, ForeignKey, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.db.database import Base
+from backend.app.db.database import Base
 
 
 class User(Base):
@@ -13,8 +11,12 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(255))
     hashed_password: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(String(50), default="officer")  # admin, officer, analyst
-    organization: Mapped[str] = mapped_column(String(255), default="SafeCity Traffic Unit")
+    role: Mapped[str] = mapped_column(
+        String(50), default="officer"
+    )  # admin, officer, analyst
+    organization: Mapped[str] = mapped_column(
+        String(255), default="SafeCity Traffic Unit"
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -32,7 +34,9 @@ class DetectionJob(Base):
     original_filename: Mapped[str] = mapped_column(String(512))
     input_path: Mapped[str] = mapped_column(String(1024))
     result_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="pending")  # pending|processing|done|failed
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending"
+    )  # pending|processing|done|failed
     conf_threshold: Mapped[float] = mapped_column(Float, default=0.35)
     object_count: Mapped[int] = mapped_column(Integer, default=0)
     violation_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -44,7 +48,9 @@ class DetectionJob(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="detections")
-    violations = relationship("Violation", back_populates="job", cascade="all, delete-orphan")
+    violations = relationship(
+        "Violation", back_populates="job", cascade="all, delete-orphan"
+    )
 
 
 class Violation(Base):
@@ -52,11 +58,17 @@ class Violation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     ticket_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
-    job_id: Mapped[int | None] = mapped_column(ForeignKey("detection_jobs.id"), nullable=True)
-    reporter_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    job_id: Mapped[int | None] = mapped_column(
+        ForeignKey("detection_jobs.id"), nullable=True
+    )
+    reporter_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id"), nullable=True
+    )
     violation_type: Mapped[str] = mapped_column(String(100), index=True)
-    # no_helmet | no_seatbelt | triple_riding | wrong_way | red_light | speeding_suspect | unregistered_plate
-    severity: Mapped[str] = mapped_column(String(20), default="medium")  # low|medium|high|critical
+    # Custom detector currently emits only no_helmet (human review required).
+    severity: Mapped[str] = mapped_column(
+        String(20), default="medium"
+    )  # low|medium|high|critical
     confidence: Mapped[float] = mapped_column(Float, default=0.0)
     location: Mapped[str] = mapped_column(String(255), default="Unknown Camera Zone")
     camera_id: Mapped[str] = mapped_column(String(64), default="CAM-01")
@@ -64,11 +76,15 @@ class Violation(Base):
     plate_text: Mapped[str | None] = mapped_column(String(32), nullable=True)
     bbox_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     snapshot_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    status: Mapped[str] = mapped_column(String(32), default="open")  # open|reviewed|issued|dismissed|paid
+    status: Mapped[str] = mapped_column(
+        String(32), default="open"
+    )  # open|reviewed|issued|dismissed|paid
     fine_amount: Mapped[float] = mapped_column(Float, default=0.0)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
 
     job = relationship("DetectionJob", back_populates="violations")
     reporter = relationship("User", back_populates="violations")

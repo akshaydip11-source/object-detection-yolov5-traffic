@@ -1,0 +1,38 @@
+# Deployment template, not proof of a working hosted service.
+# Requires a trusted custom checkpoint URL + SHA-256, and a paid persistent disk.
+# Do not connect this Blueprint until the working branch is published and reviewed.
+services:
+  - type: web
+    name: safecityai
+    runtime: docker
+    branch: arena/01a0cfd1-object-detection-yolov5-traffi
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: standard
+    region: oregon
+    healthCheckPath: /api/ready
+    disk:
+      name: safecity-data
+      mountPath: /app/data
+      sizeGB: 2
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEMO_MODE
+        value: 'false'
+      - key: REGISTRATION_ENABLED
+        value: 'false'
+      - key: MODEL_PATH
+        value: /app/data/models/best.pt
+      - key: MODEL_URL
+        sync: false
+      - key: MODEL_SHA256
+        sync: false
+      - key: DATABASE_URL
+        value: sqlite:////app/data/safecity.db
+      - key: UPLOAD_DIR
+        value: /app/data/uploads
+      - key: PORT
+        value: '8000'
