@@ -49,7 +49,7 @@ def on_startup():
     seed()
     try:
         det = get_detector()
-        print(f"✓ YOLO model loaded: {det.model_path} (input={det.input_size})")
+        print(f"YOLO model loaded: {det.model_path}")
     except Exception as e:
         print(f"⚠ Model load deferred/failed: {e}")
 

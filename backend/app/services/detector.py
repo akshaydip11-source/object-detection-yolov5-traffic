@@ -1,14 +1,20 @@
 from pathlib import Path
 import pathlib
 import os
+import sys
 import time
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Any
 
 # Compatibility fix for YOLOv5 .pt files created in Linux/Colab
-# when loading them on Windows with Python 3.14.
+# when loading them on Windows.
+#
+# The trained checkpoint contains a reference to pathlib._local.
+# Mapping it before torch loads the checkpoint prevents:
+# ModuleNotFoundError: No module named 'pathlib._local'
 if os.name == "nt" and hasattr(pathlib, "WindowsPath"):
+    sys.modules["pathlib._local"] = pathlib
     pathlib.PosixPath = pathlib.WindowsPath
 
 import cv2
@@ -52,31 +58,30 @@ class Detection:
                 "y2": self.bbox[3],
             },
             "is_violation": is_violation,
-            "violation_type": (
-                "no_helmet"
-                if is_violation
-                else None
-            ),
+            "violation_type": "no_helmet" if is_violation else None,
         }
 
-
 class SafeCityDetector:
+    """SafeCityAI detector using the custom YOLOv5 traffic model."""
 
     def __init__(self):
-        self.model_path = Path(
-            settings.model_path
-        )
-
-        self.input_size = 640
-
+        self.model_path = Path(settings.model_path)
         self.model = None
-
+        self.loaded = False
         self.load_error = None
 
+        self._load_model()
+
+    def _load_model(self):
         try:
-            yolov5_repo = (
-                ROOT_DIR / "yolov5"
-            )
+            if not self.model_path.exists():
+                self.load_error = (
+                    f"Custom YOLOv5 model not found: {self.model_path}. "
+                    "Train the model in Google Colab and place best.pt in models/."
+                )
+                return
+
+            yolov5_repo = ROOT_DIR / "yolov5"
 
             self.model = torch.hub.load(
                 str(yolov5_repo),
@@ -85,82 +90,45 @@ class SafeCityDetector:
                 source="local",
             )
 
-            self.model.conf = (
-                settings.conf_threshold
-            )
+            self.model.conf = settings.conf_threshold
+            self.model.iou = settings.iou_threshold
+            self.model.classes = None
 
-            self.model.iou = (
-                settings.iou_threshold
-            )
-
-            self.model.max_det = 100
-
-            print(
-                f"? YOLO model loaded: "
-                f"{self.model_path} "
-                f"(input={self.input_size})"
-            )
+            self.loaded = True
+            self.load_error = None
 
         except Exception as exc:
+            self.loaded = False
             self.load_error = str(exc)
-
-            print(
-                f"? YOLO model failed to load: "
-                f"{exc}"
-            )
 
     def _detect(
         self,
-        frame,
+        image,
         conf_thr: float | None = None,
     ) -> list[Detection]:
 
-        if self.model is None:
-            raise RuntimeError(
-                "YOLO model is not loaded: "
-                f"{self.load_error}"
-            )
+        if not self.loaded or self.model is None:
+            return []
 
-        confidence = (
-            conf_thr
-            if conf_thr is not None
-            else settings.conf_threshold
-        )
+        if conf_thr is not None:
+            self.model.conf = conf_thr
 
-        self.model.conf = confidence
+        results = self.model(image)
+        predictions = results.xyxy[0].detach().cpu().numpy()
 
-        results = self.model(
-            frame,
-            size=self.input_size,
-        )
+        detections = []
 
-        detections: list[Detection] = []
-
-        if (
-            results.xyxy is None
-            or len(results.xyxy) == 0
-        ):
-            return detections
-
-        for row in results.xyxy[0].tolist():
-
-            x1, y1, x2, y2, conf, class_id = row
-
+        for x1, y1, x2, y2, confidence, class_id in predictions:
             class_id = int(class_id)
 
-            if (
-                class_id < 0
-                or class_id >= len(CLASS_NAMES)
-            ):
+            if class_id < 0 or class_id >= len(CLASS_NAMES):
                 continue
 
             detections.append(
                 Detection(
                     class_id=class_id,
-                    class_name=CLASS_NAMES[
-                        class_id
-                    ],
-                    confidence=float(conf),
+                    class_name=CLASS_NAMES[class_id],
+                    confidence=float(confidence),
                     bbox=[
                         int(x1),
                         int(y1),
@@ -172,118 +140,80 @@ class SafeCityDetector:
 
         return detections
 
-    def analyze_violations(
-        self,
-        detections: list[Detection],
-    ) -> list[dict[str, Any]]:
-
-        violations: list[dict[str, Any]] = []
-
-        for detection in detections:
-
-            if (
-                detection.class_name
-                != "NoHelmet"
-            ):
-                continue
-
-            violations.append(
-                {
-                    "violation_type": "no_helmet",
-                    "label": (
-                        VIOLATION_LABELS[
-                            "no_helmet"
-                        ]
-                    ),
-                    "confidence": (
-                        detection.confidence
-                    ),
-                    "bbox": detection.bbox,
-                    "fine": (
-                        FINE_SCHEDULE[
-                            "no_helmet"
-                        ]
-                    ),
-                    "severity": "HIGH",
-                    "detection": (
-                        detection.to_dict()
-                    ),
-                }
-            )
-
-        return violations
-
     def _draw(
         self,
-        frame,
+        image,
         detections: list[Detection],
     ):
-
-        output = frame.copy()
+        output = image.copy()
 
         for detection in detections:
-
             x1, y1, x2, y2 = detection.bbox
 
-            if (
-                detection.class_name
-                == "NoHelmet"
-            ):
-
-                label = (
-                    f"No Helmet "
-                    f"{detection.confidence * 100:.1f}%"
-                )
-
-                box_color = (
-                    0,
-                    0,
-                    255,
-                )
-
-            else:
-
-                label = (
-                    f"{detection.class_name} "
-                    f"{detection.confidence * 100:.1f}%"
-                )
-
-                box_color = (
-                    0,
-                    255,
-                    0,
-                )
+            label = (
+                f"{detection.class_name} "
+                f"{detection.confidence:.2f}"
+            )
 
             cv2.rectangle(
                 output,
                 (x1, y1),
                 (x2, y2),
-                box_color,
+                (0, 220, 120),
                 2,
+            )
+
+            (tw, th), _ = cv2.getTextSize(
+                label,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                2,
+            )
+
+            cv2.rectangle(
+                output,
+                (x1, max(0, y1 - th - 10)),
+                (x1 + tw + 8, y1),
+                (0, 220, 120),
+                -1,
             )
 
             cv2.putText(
                 output,
                 label,
-                (
-                    x1,
-                    max(
-                        y1 - 8,
-                        20,
-                    ),
-                ),
+                (x1 + 4, y1 - 6),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (
-                    255,
-                    255,
-                    255,
-                ),
+                0.55,
+                (0, 0, 0),
                 2,
                 cv2.LINE_AA,
             )
 
         return output
+
+    def analyze_violations(
+        self,
+        detections: list[Detection],
+    ) -> list[dict[str, Any]]:
+
+        violations = []
+
+        for detection in detections:
+            if detection.class_name == "NoHelmet":
+                violations.append(
+                    {
+                        "violation_type": "no_helmet",
+                        "severity": "high",
+                        "confidence": detection.confidence,
+                        "location": "Traffic Camera",
+                        "camera_id": "CAM-01",
+                        "vehicle_class": "motorcycle",
+                        "bbox": detection.bbox,
+                        "fine_amount": 1000.0,
+                    }
+                )
+
+        return violations
 
     def process_image_file(
         self,
@@ -292,66 +222,33 @@ class SafeCityDetector:
         conf_thr: float | None = None,
     ) -> dict[str, Any]:
 
-        started_at = time.perf_counter()
+        image = cv2.imread(str(input_path))
 
-        frame = cv2.imread(
-            str(input_path)
-        )
-
-        if frame is None:
+        if image is None:
             raise ValueError(
-                f"Could not read image: "
-                f"{input_path}"
+                f"Could not read image: {input_path}"
             )
 
-        detections = self._detect(
-            frame,
-            conf_thr,
-        )
+        detections = self._detect(image, conf_thr)
+        violations = self.analyze_violations(detections)
 
-        violations = (
-            self.analyze_violations(
-                detections
-            )
-        )
+        output = self._draw(image, detections)
 
-        output_frame = self._draw(
-            frame,
-            detections,
-        )
-
-        output_path = Path(
-            output_path
-        )
-
+        output_path = Path(output_path)
         output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        if not cv2.imwrite(
+        cv2.imwrite(
             str(output_path),
-            output_frame,
-        ):
-            raise ValueError(
-                f"Could not write image: "
-                f"{output_path}"
-            )
+            output,
+        )
 
-        processing_ms = (
-            time.perf_counter()
-            - started_at
-        ) * 1000
-
-        object_counts: dict[
-            str, int
-        ] = {}
+        object_counts = {}
 
         for detection in detections:
-
-            object_counts[
-                detection.class_name
-            ] = (
+            object_counts[detection.class_name] = (
                 object_counts.get(
                     detection.class_name,
                     0,
@@ -359,71 +256,33 @@ class SafeCityDetector:
                 + 1
             )
 
-        violation_counts: dict[
-            str, int
-        ] = {}
+        violation_counts = {}
 
         for violation in violations:
+            name = violation["violation_type"]
 
-            violation_type = (
-                violation[
-                    "violation_type"
-                ]
-            )
-
-            violation_counts[
-                violation_type
-            ] = (
-                violation_counts.get(
-                    violation_type,
-                    0,
-                )
+            violation_counts[name] = (
+                violation_counts.get(name, 0)
                 + 1
             )
 
         return {
-            "result_path": str(
-                output_path
-            ),
-            "processing_ms": (
-                processing_ms
-            ),
+            "result_path": str(output_path),
+            "processing_ms": 0.0,
             "detections": [
-                detection.to_dict()
-                for detection in detections
+                d.to_dict()
+                for d in detections
             ],
             "violations": violations,
-            "object_counts": (
-                object_counts
-            ),
-            "violation_counts": (
-                violation_counts
-            ),
-            "total_detections": len(
-                detections
-            ),
-            "total_violations": len(
-                violations
-            ),
+            "object_counts": object_counts,
+            "violation_counts": violation_counts,
+            "total_detections": len(detections),
+            "total_violations": len(violations),
             "summary": {
-                "object_count": len(
-                    detections
-                ),
-                "violation_count": len(
-                    violations
-                ),
-                "class_counts": (
-                    object_counts
-                ),
-                "violations_by_type": (
-                    violation_counts
-                ),
-                "total_detections": len(
-                    detections
-                ),
-                "total_violations": len(
-                    violations
-                ),
+                "total_detections": len(detections),
+                "total_violations": len(violations),
+                "object_count": len(detections),
+                "violation_count": len(violations),
                 "classes": CLASS_NAMES,
                 "model": "Custom YOLOv5",
             },
@@ -438,53 +297,33 @@ class SafeCityDetector:
         skip: int = 1,
     ) -> dict[str, Any]:
 
-        started_at = time.perf_counter()
-
         cap = cv2.VideoCapture(
             str(input_path)
         )
 
         if not cap.isOpened():
             raise ValueError(
-                f"Could not open video: "
-                f"{input_path}"
+                f"Could not open video: {input_path}"
             )
 
         width = int(
-            cap.get(
-                cv2.CAP_PROP_FRAME_WIDTH
-            )
+            cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         )
 
         height = int(
-            cap.get(
-                cv2.CAP_PROP_FRAME_HEIGHT
-            )
+            cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
         )
 
         fps = (
-            cap.get(
-                cv2.CAP_PROP_FPS
-            )
+            cap.get(cv2.CAP_PROP_FPS)
             or 25.0
         )
 
-        output_path = Path(
-            output_path
-        )
+        output_path = Path(output_path)
 
         output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
-        )
-
-        # Temporary OpenCV output.
-        temp_path = (
-            output_path.parent
-            / (
-                f"{output_path.stem}"
-                "_opencv.mp4"
-            )
         )
 
         fourcc = cv2.VideoWriter_fourcc(
@@ -492,35 +331,22 @@ class SafeCityDetector:
         )
 
         writer = cv2.VideoWriter(
-            str(temp_path),
+            str(output_path),
             fourcc,
             fps,
             (width, height),
         )
 
-        if not writer.isOpened():
-            cap.release()
-
-            raise ValueError(
-                "Could not create "
-                f"temporary video: "
-                f"{temp_path}"
-            )
-
         total_raw_detections = 0
-
         unique_violation_flags = set()
 
         frame_count = 0
-
         processed_frames = 0
 
         all_detections = []
-
         all_violations = []
 
         try:
-
             while True:
 
                 ret, frame = cap.read()
@@ -539,8 +365,7 @@ class SafeCityDetector:
 
                 if (
                     max_frames is not None
-                    and processed_frames
-                    >= max_frames
+                    and processed_frames >= max_frames
                 ):
                     break
 
@@ -549,10 +374,8 @@ class SafeCityDetector:
                     conf_thr,
                 )
 
-                violations = (
-                    self.analyze_violations(
-                        detections
-                    )
+                violations = self.analyze_violations(
+                    detections
                 )
 
                 total_raw_detections += len(
@@ -560,7 +383,6 @@ class SafeCityDetector:
                 )
 
                 for violation in violations:
-
                     unique_violation_flags.add(
                         violation[
                             "violation_type"
@@ -569,9 +391,8 @@ class SafeCityDetector:
 
                 all_detections.extend(
                     [
-                        detection.to_dict()
-                        for detection
-                        in detections
+                        d.to_dict()
+                        for d in detections
                     ]
                 )
 
@@ -589,118 +410,27 @@ class SafeCityDetector:
                 processed_frames += 1
 
         finally:
-
             cap.release()
-
             writer.release()
 
-        if not temp_path.exists():
-            raise ValueError(
-                "Temporary video was not created"
-            )
-
-        # Convert OpenCV mp4v output to
-        # browser-friendly H.264 MP4.
-        ffmpeg_exe = (
-            imageio_ffmpeg.get_ffmpeg_exe()
-        )
-
-        if output_path.exists():
-            output_path.unlink()
-
-        command = [
-            ffmpeg_exe,
-            "-y",
-            "-i",
-            str(temp_path),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "23",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
-            "-an",
-            str(output_path),
-        ]
-
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        if completed.returncode != 0:
-            try:
-                if output_path.exists():
-                    output_path.unlink()
-            except Exception:
-                pass
-
-            raise RuntimeError(
-                "FFmpeg video conversion failed: "
-                f"{completed.stderr[-2000:]}"
-            )
-
-        try:
-            temp_path.unlink()
-        except OSError:
-            pass
-
-        if not output_path.exists():
-            raise ValueError(
-                "Final browser-compatible "
-                "video was not created"
-            )
-
-        processing_ms = (
-            time.perf_counter()
-            - started_at
-        ) * 1000
-
         return {
-            "result_path": str(
-                output_path
-            ),
-            "processing_ms": (
-                processing_ms
-            ),
+            "result_path": str(output_path),
+            "processing_ms": 0.0,
             "total_frames": frame_count,
-            "processed_frames": (
-                processed_frames
-            ),
-            "total_raw_detections": (
-                total_raw_detections
-            ),
+            "processed_frames": processed_frames,
+            "total_raw_detections": total_raw_detections,
             "unique_violation_flags": list(
                 unique_violation_flags
             ),
-            "detections": (
-                all_detections[:200]
-            ),
+            "detections": all_detections,
             "violations": all_violations,
             "snapshot_path": None,
-            "video_url": str(
-                output_path
-            ),
+            "video_url": str(output_path),
             "summary": {
-                "total_frames": (
-                    frame_count
-                ),
-                "processed_frames": (
-                    processed_frames
-                ),
-                "total_raw_detections": (
-                    total_raw_detections
-                ),
+                "total_frames": frame_count,
+                "processed_frames": processed_frames,
+                "total_raw_detections": total_raw_detections,
                 "unique_violation_flags": list(
-                    unique_violation_flags
-                ),
-                "violation_count": len(
                     unique_violation_flags
                 ),
                 "model": "Custom YOLOv5",
@@ -724,5 +454,5 @@ def get_detector() -> SafeCityDetector:
 def new_job_id() -> str:
     import uuid
 
-    return uuid.uuid4().hex[:12]
+    return uuid.uuid4().hex
 
