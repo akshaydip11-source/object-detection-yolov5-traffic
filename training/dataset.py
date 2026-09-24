@@ -23,6 +23,7 @@ def validate_dataset(config_path: Path) -> dict:
 
     Requires train/val image directories and parallel labels directories. Empty
     label files are valid negatives, but every class must occur in each split.
+    A configured test split is validated and checked for leakage too.
     Rejects corrupt images, bad boxes, orphan labels and byte-identical split leakage.
     """
     config_path = Path(config_path).resolve()
@@ -54,13 +55,13 @@ def validate_dataset(config_path: Path) -> dict:
     report = {"names": names, "path": str(base), "splits": {}}
     seen_hashes = {}
     combined = hashlib.sha256()
-    for split in ("train", "val"):
+    for split in (("train", "val", "test") if "test" in config else ("train", "val")):
         value = config.get(split)
         if not isinstance(value, str):
             raise DatasetError(f"{split} must name an image directory")
         folder = (base / value).resolve()
         if (
-            folder.name not in {"train", "val", "valid", "images"}
+            folder.name not in {"train", "val", "valid", "test", "images"}
             or "images" not in folder.parts
         ):
             raise DatasetError(
@@ -100,7 +101,7 @@ def validate_dataset(config_path: Path) -> dict:
                 digest = hashlib.file_digest(f, "sha256").hexdigest()
             if digest in seen_hashes and seen_hashes[digest] != split:
                 raise DatasetError(
-                    f"Train/validation leakage: duplicate image {image.name}"
+                    f"Train/validation/test leakage: duplicate image {image.name}"
                 )
             seen_hashes[digest] = split
             text = label.read_text()

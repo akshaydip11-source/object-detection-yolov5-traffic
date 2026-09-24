@@ -21,6 +21,7 @@ def main():
     parser.add_argument("--data", type=Path, default=ROOT / "dataset/traffic.yaml")
     parser.add_argument("--weights", default="yolov5s.pt")
     parser.add_argument("--epochs", type=int, default=50)
+    parser.add_argument("--img-size", type=int, default=640)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--device", default="", help="0 for GPU, cpu for CPU")
     parser.add_argument("--workers", type=int, default=2)
@@ -36,8 +37,8 @@ def main():
         help="Explicitly allow replacing a local best.pt",
     )
     args = parser.parse_args()
-    if args.epochs < 1 or args.batch < 1 or args.workers < 0:
-        parser.error("epochs/batch must be positive; workers must be nonnegative")
+    if args.epochs < 1 or args.batch < 1 or args.workers < 0 or args.img_size < 32 or args.img_size % 32:
+        parser.error("epochs/batch must be positive; workers nonnegative; img-size a positive multiple of 32")
     if args.overwrite_model and not args.install_model:
         parser.error("--overwrite-model requires --install-model")
     try:
@@ -64,7 +65,7 @@ def main():
         sys.executable,
         str(ROOT / "yolov5/train.py"),
         "--img",
-        "640",
+        str(args.img_size),
         "--batch",
         str(args.batch),
         "--epochs",
@@ -94,7 +95,7 @@ def main():
         "--data",
         str(args.data.resolve()),
         "--img",
-        "640",
+        str(args.img_size),
         "--batch",
         str(args.batch),
         "--project",

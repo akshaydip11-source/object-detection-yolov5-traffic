@@ -165,12 +165,13 @@ python -m playwright install chromium
 RUN_BROWSER_TESTS=1 python -m pytest tests/test_browser.py -q
 ```
 
-With browser tests enabled: **77 passed, none skipped**. Chromium was installed via
+With browser tests enabled: **90 passed, none skipped**. Chromium was installed via
 an alternate package source after its normal download failed. Browser tests now use
 a real HTTP server and cover images, H.264 video, fake webcam, PDF and result recovery.
 One test runs actual YOLOv5 inference using an **untrained temporary checkpoint**;
-this is not accuracy evidence. Docker execution remains unverified here, and GitHub
-CI has not run for these unpublished changes. See the [investigation](docs/ANNOTATION_FIX.md).
+this is not accuracy evidence. GitHub [application CI](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35940998455) passed for commit `41c1c9a`, including Docker/container and browser checks.
+The fixes are published in [draft PR #1](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/pull/1); no main merge or deployment has occurred.
+The new [public-data pilot](docs/PUBLIC_DATA.md) remains experimental and must record real results before any accuracy claim. See the [investigation](docs/ANNOTATION_FIX.md).
 
 ```text
 backend/app/      API, permissions, bounded inference, persistence, private media

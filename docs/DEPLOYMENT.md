@@ -12,7 +12,9 @@ Do not call the application deployment-ready until all applicable checks pass:
 
 The current sandbox cannot supply the missing trained artifact. Docker could not
 be installed here; Chromium was obtained via an alternate package source and the
-browser suite passed. CI/container checks remain provided, not claimed as executed.
+browser suite passed. GitHub application CI at `41c1c9a` subsequently passed the
+Docker build, container smoke and browser checks. No real-host deployment or trained-model
+accuracy sign-off is claimed; see [the current investigation](ANNOTATION_FIX.md).
 
 ## Docker + Compose
 

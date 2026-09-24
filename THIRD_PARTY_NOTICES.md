@@ -23,3 +23,13 @@
 - `imageio-ffmpeg` provides the FFmpeg binary used for H.264 output. Review the
   bundled FFmpeg/codec license notices in that dependency before distribution;
   adding this dependency is not a blanket commercial codec/license grant.
+
+## Optional public-data pilot
+
+The optional pilot imports MotorbikeDelivery_2.0 v8, published by MotorbikeDelivery
+and mirrored by the RASYD contributors, under the publisher-declared CC BY 4.0
+license. No source dataset files are committed here. The import preserves attribution,
+a pinned source hash and a modification manifest. See [the data assessment](docs/PUBLIC_DATA.md)
+for exact source/license links, label changes and limitations. The pilot uses the
+official Ultralytics YOLOv5n pretrained backbone; its licensing obligations are not
+removed by fine-tuning or by the dataset license.

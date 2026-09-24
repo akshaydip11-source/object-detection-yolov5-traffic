@@ -2,7 +2,9 @@
 
 ## What is actually deployed
 
-GitHub `main` currently points to `8159a35`. The deployment linked by GitHub is:
+The initial investigation inspected GitHub `main` at `8159a35`. Main subsequently
+advanced to `6f472d6` (removal of false fallback violations), also incorporated into
+this working branch without changing main. The deployment linked by GitHub is:
 https://safecityai-t3ca.onrender.com
 
 Its public `/api/health` was inspected and reported:
@@ -44,7 +46,7 @@ pretend to be the live Render backend. The same assertion passes on the fix.
 
 ## End-to-end tests actually run
 
-**77 tests passed with browser tests enabled; none skipped.** Chromium 153 runs over
+**90 tests passed with browser tests enabled; none skipped.** Chromium 153 runs over
 real HTTP against an isolated Uvicorn server, not a mocked browser fetch layer.
 Covered flows include:
 
@@ -58,8 +60,10 @@ Covered flows include:
 
 The remaining tests cover API permissions, media ownership, upload/resource limits,
 reports, model integrity/provisioning and dataset validation. Training preflight
-correctly rejects the empty repository dataset. Docker/Render execution is still
-unverified in this sandbox; neither live deployment nor real-model accuracy is claimed.
+correctly rejects the empty repository dataset. GitHub application CI at `41c1c9a` passed the Docker build, actual container smoke
+and browser checks. Local Docker remains unavailable. Neither live deployment nor
+real-model accuracy is claimed. The added public-data tests use generated fixtures,
+not actual training images.
 
 ## Training/deployment handoff
 
@@ -69,7 +73,10 @@ uses the same pipeline. None of this substitutes for real annotated training dat
 Managed deployments may provision the owner's trusted artifact using HTTPS
 `MODEL_URL` plus mandatory `MODEL_SHA256`; no fallback URL is supplied.
 
-The working branch's starting commit and the current GitHub main are separate root
-histories. No force-push, reset, overwrite of main or automatic redeployment was
-performed. These corrected files must be reviewed/published before they can change
-the live application.
+The starting checkout and GitHub main had separate root histories. Both were
+preserved through merge commits on the working branch, along with the newer
+`6f472d6` safety fix. [Draft PR #1](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/pull/1)
+is published; [application CI passed](https://github.com/akshaydip11-source/object-detection-yolov5-traffic/actions/runs/35940998455).
+No force-push, overwrite/merge of main, paid provisioning or automatic deployment
+was performed. Public-data selection and the bounded training pilot are documented
+in [PUBLIC_DATA.md](PUBLIC_DATA.md); the pilot has no completed metrics yet.

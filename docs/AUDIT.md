@@ -1,10 +1,12 @@
 > **Follow-up:** The annotation failure was investigated against the newer GitHub
-> commit `8159a35` and its Render deployment. The corrected code now passes **77
+> commit `8159a35` and its Render deployment. The corrected code now passes **90
 > tests, including all 9 real-browser tests**, with no skips. See
 > [the current investigation](ANNOTATION_FIX.md) for the latest evidence and changes.
 > Browser limitations/counts below describe the earlier audit, not the current run.
 > The actual custom checkpoint and labeled dataset remain missing; no deployment or
-> GitHub publication has been performed.
+> deployment has been performed. Draft PR #1 is published and application CI at
+> `41c1c9a` passed, including Docker/container/browser checks. Remaining statements
+> below about unpublished code and unavailable checks are historical.
 
 # Repository and deployment-preparation audit — 2026-09-24
 

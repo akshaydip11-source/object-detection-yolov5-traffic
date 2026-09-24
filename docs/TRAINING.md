@@ -65,3 +65,10 @@ webcam, signed media and reports in the browser.
 **No ONNX export is needed for this backend.** Do not use a YOLOv8/11 export command
 as a substitute for YOLOv5 training. Share the trusted best.pt separately, not through
 Git; managed hosts may use the explicit HTTPS MODEL_URL + MODEL_SHA256 mechanism.
+
+## Public-data pilot
+
+See [Public data assessment](PUBLIC_DATA.md) for the pinned CC BY 4.0 source,
+explicit label mapping, provenance and the bounded experimental CPU workflow.
+Do not substitute that pilot for independent field validation or install its
+checkpoint automatically. Generated training artifacts are excluded from Git.
