@@ -395,12 +395,14 @@
       btn.addEventListener("click", async () => {
         try {
           const res = await fetch(btn.dataset.src);
+          if (!res.ok) throw new Error(`Sample image request failed (${res.status})`);
           const blob = await res.blob();
           const file = new File([blob], btn.dataset.name, { type: blob.type || "image/jpeg" });
           state.mode = "image";
           document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === "image"));
           setFile(file);
-          SafeCity.toast(`Loaded sample: ${btn.dataset.name}`);
+          SafeCity.toast(`Running sample: ${btn.dataset.name}`);
+          document.getElementById("runBtn").click();
         } catch (e) {
           SafeCity.toast("Could not load sample", "err");
         }
