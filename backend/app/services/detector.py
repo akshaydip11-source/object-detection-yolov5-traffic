@@ -3,18 +3,39 @@ import pathlib
 import os
 import sys
 import time
-import subprocess
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Any
 
-# Windows-only compatibility fix for YOLOv5 .pt files
-# trained/saved on Linux/Colab.
+# ---------------------------------------------------------------------------
+# Cross-platform pathlib compatibility for YOLOv5 .pt checkpoints.
 #
-# IMPORTANT:
-# This must NOT run on Linux/Render.
+# Some YOLOv5 checkpoints can contain references to pathlib._local classes.
+# Render runs Linux, while the checkpoint was created/handled on Windows.
+# Create a lightweight pathlib._local compatibility module before loading
+# the checkpoint.
+# ---------------------------------------------------------------------------
+
+if "pathlib._local" not in sys.modules:
+    import types
+
+    pathlib_local = types.ModuleType("pathlib._local")
+
+    pathlib_local.PosixPath = pathlib.PosixPath
+
+    pathlib_local.WindowsPath = (
+        pathlib.WindowsPath
+        if hasattr(pathlib, "WindowsPath")
+        else pathlib.PosixPath
+    )
+
+    sys.modules["pathlib._local"] = pathlib_local
+
+
+# Windows-only compatibility.
+# This preserves the working behavior on your Lenovo/Windows machine.
 if os.name == "nt" and hasattr(pathlib, "WindowsPath"):
-    sys.modules["pathlib._local"] = pathlib
     pathlib.PosixPath = pathlib.WindowsPath
+
 
 import cv2
 import torch
@@ -60,7 +81,11 @@ class Detection:
                 "y2": self.bbox[3],
             },
             "is_violation": is_violation,
-            "violation_type": "no_helmet" if is_violation else None,
+            "violation_type": (
+                "no_helmet"
+                if is_violation
+                else None
+            ),
         }
 
 
@@ -79,8 +104,10 @@ class SafeCityDetector:
         try:
             if not self.model_path.exists():
                 self.load_error = (
-                    f"Custom YOLOv5 model not found: {self.model_path}. "
-                    "Train the model in Google Colab and place best.pt in models/."
+                    f"Custom YOLOv5 model not found: "
+                    f"{self.model_path}. "
+                    "Train the model in Google Colab and "
+                    "place best.pt in models/."
                 )
                 return
 
@@ -88,7 +115,8 @@ class SafeCityDetector:
 
             if not yolov5_repo.exists():
                 self.load_error = (
-                    f"YOLOv5 repository not found: {yolov5_repo}"
+                    f"YOLOv5 repository not found: "
+                    f"{yolov5_repo}"
                 )
                 return
 
@@ -106,14 +134,20 @@ class SafeCityDetector:
             self.loaded = True
             self.load_error = None
 
-            print(f"YOLO model loaded: {self.model_path}")
+            print(
+                f"YOLO model loaded: "
+                f"{self.model_path}"
+            )
 
         except Exception as exc:
             self.loaded = False
             self.model = None
             self.load_error = str(exc)
 
-            print(f"YOLO model load failed: {self.load_error}")
+            print(
+                f"YOLO model load failed: "
+                f"{self.load_error}"
+            )
 
     def _detect(
         self,
@@ -138,10 +172,21 @@ class SafeCityDetector:
 
         detections = []
 
-        for x1, y1, x2, y2, confidence, class_id in predictions:
+        for (
+            x1,
+            y1,
+            x2,
+            y2,
+            confidence,
+            class_id,
+        ) in predictions:
+
             class_id = int(class_id)
 
-            if class_id < 0 or class_id >= len(CLASS_NAMES):
+            if (
+                class_id < 0
+                or class_id >= len(CLASS_NAMES)
+            ):
                 continue
 
             detections.append(
@@ -176,7 +221,9 @@ class SafeCityDetector:
             )
 
             if detection.class_name == "NoHelmet":
-                label = f"NO HELMET | {label}"
+                label = (
+                    f"NO HELMET | {label}"
+                )
 
             cv2.rectangle(
                 output,
@@ -189,7 +236,10 @@ class SafeCityDetector:
             cv2.putText(
                 output,
                 label,
-                (x1, max(y1 - 10, 20)),
+                (
+                    x1,
+                    max(y1 - 10, 20),
+                ),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
                 (0, 220, 120),
@@ -209,7 +259,11 @@ class SafeCityDetector:
 
         for detection in detections:
             object_counts[detection.class_name] = (
-                object_counts.get(detection.class_name, 0) + 1
+                object_counts.get(
+                    detection.class_name,
+                    0,
+                )
+                + 1
             )
 
         violation_counts: dict[str, int] = {}
@@ -221,7 +275,11 @@ class SafeCityDetector:
             )
 
             violation_counts[violation_type] = (
-                violation_counts.get(violation_type, 0) + 1
+                violation_counts.get(
+                    violation_type,
+                    0,
+                )
+                + 1
             )
 
         return {
@@ -249,9 +307,13 @@ class SafeCityDetector:
             violations.append(
                 {
                     "violation_type": "no_helmet",
-                    "label": VIOLATION_LABELS["no_helmet"],
+                    "label": VIOLATION_LABELS[
+                        "no_helmet"
+                    ],
                     "severity": "high",
-                    "fine": FINE_SCHEDULE["no_helmet"],
+                    "fine": FINE_SCHEDULE[
+                        "no_helmet"
+                    ],
                     "confidence": detection.confidence,
                     "box": {
                         "x1": detection.bbox[0],
@@ -273,11 +335,14 @@ class SafeCityDetector:
 
         start = time.perf_counter()
 
-        image = cv2.imread(str(image_path))
+        image = cv2.imread(
+            str(image_path)
+        )
 
         if image is None:
             raise ValueError(
-                f"Unable to read image: {image_path}"
+                f"Unable to read image: "
+                f"{image_path}"
             )
 
         detections = self._detect(
@@ -308,28 +373,34 @@ class SafeCityDetector:
             time.perf_counter() - start
         ) * 1000
 
+        summary = self._build_summary(
+            detections,
+            violations,
+        )
+
         return {
             "detections": [
                 detection.to_dict()
                 for detection in detections
             ],
             "violations": violations,
-            "object_counts": self._build_summary(
-                detections,
-                violations,
-            )["object_counts"],
-            "violation_counts": self._build_summary(
-                detections,
-                violations,
-            )["violation_counts"],
-            "total_detections": len(detections),
-            "total_violations": len(violations),
-            "result_path": str(output_path),
-            "processing_ms": processing_ms,
-            "summary": self._build_summary(
-                detections,
-                violations,
+            "object_counts": summary[
+                "object_counts"
+            ],
+            "violation_counts": summary[
+                "violation_counts"
+            ],
+            "total_detections": len(
+                detections
             ),
+            "total_violations": len(
+                violations
+            ),
+            "result_path": str(
+                output_path
+            ),
+            "processing_ms": processing_ms,
+            "summary": summary,
         }
 
     def process_video_file(
@@ -349,15 +420,20 @@ class SafeCityDetector:
 
         if not cap.isOpened():
             raise ValueError(
-                f"Unable to open video: {video_path}"
+                f"Unable to open video: "
+                f"{video_path}"
             )
 
         frame_width = int(
-            cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+            cap.get(
+                cv2.CAP_PROP_FRAME_WIDTH
+            )
         )
 
         frame_height = int(
-            cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+            cap.get(
+                cv2.CAP_PROP_FRAME_HEIGHT
+            )
         )
 
         fps = cap.get(
@@ -389,7 +465,10 @@ class SafeCityDetector:
             str(output_path),
             fourcc,
             fps,
-            (frame_width, frame_height),
+            (
+                frame_width,
+                frame_height,
+            ),
         )
 
         try:
@@ -410,7 +489,8 @@ class SafeCityDetector:
 
                 if (
                     max_frames is not None
-                    and processed_frames >= max_frames
+                    and processed_frames
+                    >= max_frames
                 ):
                     break
 
@@ -419,8 +499,10 @@ class SafeCityDetector:
                     conf_thr=conf_thr,
                 )
 
-                violations = self._build_violations(
-                    detections
+                violations = (
+                    self._build_violations(
+                        detections
+                    )
                 )
 
                 total_raw_detections += len(
@@ -429,7 +511,9 @@ class SafeCityDetector:
 
                 for violation in violations:
                     unique_violation_flags.add(
-                        violation["violation_type"]
+                        violation[
+                            "violation_type"
+                        ]
                     )
 
                 all_detections.extend(
@@ -463,20 +547,32 @@ class SafeCityDetector:
         return {
             "total_frames": frame_count,
             "processed_frames": processed_frames,
-            "total_raw_detections": total_raw_detections,
+            "total_raw_detections": (
+                total_raw_detections
+            ),
             "unique_violation_flags": list(
                 unique_violation_flags
             ),
-            "detections": all_detections[:200],
+            "detections": (
+                all_detections[:200]
+            ),
             "violations": all_violations,
             "snapshot_path": None,
-            "video_url": str(output_path),
-            "result_path": str(output_path),
+            "video_url": str(
+                output_path
+            ),
+            "result_path": str(
+                output_path
+            ),
             "processing_ms": processing_ms,
             "summary": {
                 "total_frames": frame_count,
-                "processed_frames": processed_frames,
-                "total_raw_detections": total_raw_detections,
+                "processed_frames": (
+                    processed_frames
+                ),
+                "total_raw_detections": (
+                    total_raw_detections
+                ),
                 "total_violations": len(
                     all_violations
                 ),
