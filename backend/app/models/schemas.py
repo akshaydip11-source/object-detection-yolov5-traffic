@@ -70,6 +70,20 @@ class DetectResponse(BaseModel):
     created_at: datetime
 
 
+class BriefDetection(BaseModel):
+    class_name: Literal["Helmet", "No_Helmet", "License_Plate"] = Field(alias="class")
+    confidence: float
+    box: list[float] = Field(min_length=4, max_length=4)
+
+
+class BriefDetectResponse(BaseModel):
+    job_id: str
+    detections: list[BriefDetection]
+    box_format: Literal["xywh"] = "xywh"
+    coordinate_system: Literal["image_pixels"] = "image_pixels"
+    annotated_image_url: str | None = None
+
+
 class ViolationOut(BaseModel):
     id: int
     ticket_id: str

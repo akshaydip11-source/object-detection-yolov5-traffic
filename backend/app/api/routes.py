@@ -15,6 +15,8 @@ from backend.app.config import settings
 from backend.app.db.database import get_db
 from backend.app.db.models import AuditLog, CameraZone, DetectionJob, User, Violation
 from backend.app.models.schemas import (
+    BriefDetection,
+    BriefDetectResponse,
     CameraOut,
     DashboardStats,
     DetectResponse,
@@ -277,6 +279,40 @@ def detect_image(
             if isinstance(e, ValueError)
             else "Detection failed; check server logs",
         ) from e
+
+
+@router.post(
+    "/detect/predict",
+    response_model=BriefDetectResponse,
+    dependencies=[Depends(inference_slot)],
+)
+def predict_for_case_study(
+    file: UploadFile = File(...),
+    conf_threshold: float = Form(0.50, ge=0, le=1),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Brief-compatible JSON. Box means [left, top, width, height] in pixels.
+
+    Reuse the authenticated, bounded image pipeline; never create tickets here.
+    Keep /detect/image's corner-coordinate contract unchanged for the web console.
+    """
+    result = detect_image(
+        file=file, conf_threshold=conf_threshold, camera_id="CASE-STUDY",
+        location="Case-study image upload", create_tickets=False, user=user, db=db,
+    )
+    names = {"helmet": "Helmet", "nohelmet": "No_Helmet", "licenseplate": "License_Plate"}
+    items = []
+    for det in result.detections:
+        key = "".join(c for c in det.class_name.lower() if c.isalnum())
+        box = det.box
+        items.append(BriefDetection(**{
+            "class": names[key], "confidence": det.confidence,
+            "box": [box.x1, box.y1, box.x2 - box.x1, box.y2 - box.y1],
+        }))
+    return BriefDetectResponse(
+        job_id=result.job_id, detections=items, annotated_image_url=result.result_url,
+    )
 
 
 @router.post(

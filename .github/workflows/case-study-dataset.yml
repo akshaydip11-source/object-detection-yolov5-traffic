@@ -1,0 +1,33 @@
+name: Case-study annotated dataset
+on:
+  push:
+    branches: [arena/01a0cfd1-object-detection-yolov5-traffi]
+    paths:
+      - .github/workflows/case-study-dataset.yml
+      - training/export_dataset.py
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: pip install 'pillow>=11.1,<13' 'PyYAML>=6.0.2,<7'
+      - uses: actions/cache/restore@v5
+        with:
+          path: .cache/public-data/rasyd.zip
+          key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
+      - run: python -m training.public_dataset --output runs/case-study-source --polygon-boxes --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+      - run: python -m training.export_dataset --data runs/case-study-source/data.yaml --output runs/case-study-dataset
+      - uses: actions/upload-artifact@v6
+        with:
+          name: case-study-annotated-dataset
+          retention-days: 7
+          path: |
+            runs/case-study-dataset.zip
+            runs/case-study-dataset/export_report.json
+            runs/case-study-dataset/ATTRIBUTION.md

@@ -1,5 +1,11 @@
 # SafeCityAI — Custom YOLOv5 Traffic Detection
 
+> **Case-study requirements:** See [the deliverable checklist and commands](docs/CASE_STUDY.md).
+> The specified final architecture is YOLOv5s/m. The earlier nano pilot is not the
+> final model. Full-resolution training and a real 30-second street demo remain
+> outstanding; a screenshot or synthetic test video does not fulfill them.
+
+
 A FastAPI/PyTorch internship prototype for **Helmet, NoHelmet and LicensePlate**
 detection, with a same-origin HTML/CSS/JS console, annotated media and review records.
 
