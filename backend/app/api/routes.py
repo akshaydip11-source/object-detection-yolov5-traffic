@@ -72,6 +72,7 @@ def health():
         app=settings.app_name,
         model_loaded=loaded,
         model_path=str(settings.model_path),
+        load_error=getattr(det, "load_error", None),
     )
 
 
@@ -620,4 +621,5 @@ def dashboard_stats(db: Session = Depends(get_db)):
 @router.get("/users", response_model=list[UserOut])
 def list_users(admin: User = Depends(require_admin), db: Session = Depends(get_db)):
     return db.query(User).order_by(User.created_at.desc()).all()
+
 

@@ -129,3 +129,5 @@ class HealthOut(BaseModel):
     model_loaded: bool
     model_path: str
     version: str = "1.0.0"
+    load_error: str | None = None
+
