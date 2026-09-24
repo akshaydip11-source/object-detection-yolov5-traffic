@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   pilot:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       YOLOv5_AUTOINSTALL: 'false'
@@ -22,8 +22,8 @@ jobs:
       WANDB_MODE: disabled
       MPLBACKEND: Agg
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: pip
@@ -35,9 +35,16 @@ jobs:
         run: python -m training.public_dataset --output runs/public-pilot-data
       - name: Train experimental YOLOv5n and evaluate held-out validation and test data
         run: python -m training.public_pilot
+      - run: python -m playwright install --with-deps chromium
+      - name: Actual trained checkpoint through HTTP, API and Chromium
+        run: |
+          PILOT_CHECKPOINT=runs/public-pilot-results/experimental_best.pt \
+          PILOT_IMAGE="$(find runs/public-pilot-data/images/test -type f | sort | head -1)" \
+          RUN_BROWSER_TESTS=1 python -m pytest tests/test_browser.py::test_browser_actual_yolov5_image_flow -q
+          echo "::notice title=Trained-checkpoint browser smoke::Passed actual YOLOv5 pilot checkpoint through HTTP upload, inference, signed JPEG and Chromium rendering. Not accuracy certification."
       - name: Keep reproducible audit and experimental results (never install automatically)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: public-dataset-pilot
           retention-days: 14

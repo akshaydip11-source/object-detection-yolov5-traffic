@@ -1,7 +1,7 @@
 """Real browser checks, opt in after: playwright install chromium.
 
 CI runs these; local sandboxes without a browser must not claim a browser pass.
-Requests are routed to TestClient: real HTML/JS/rendering, no open test server.
+Chromium uses a real HTTP/Uvicorn server with an isolated test database.
 """
 
 import os
@@ -254,13 +254,24 @@ def test_browser_refresh_recovers_preview_without_rerun(browser_page, detector):
 
 
 def test_browser_actual_yolov5_image_flow(browser_page, monkeypatch, tmp_path):
-    """Real network inference + DOM + signed image, but RANDOM, UNTRAINED weights."""
+    """Actual inference/HTTP/DOM; untrained fixture unless explicit pilot paths supplied."""
     from playwright.sync_api import expect
     from tests.checkpoint_factory import create
     from backend.app.services import detector as runtime
 
-    path = tmp_path / "browser-untrained-fixture.pt"
-    create(path)
+    from pathlib import Path
+    from PIL import Image
+
+    pilot_checkpoint = os.getenv("PILOT_CHECKPOINT")
+    pilot_image = os.getenv("PILOT_IMAGE")
+    assert bool(pilot_checkpoint) == bool(pilot_image), "Supply both explicit pilot paths"
+    if pilot_checkpoint:
+        path = Path(pilot_checkpoint).resolve()
+        source = Path(pilot_image).resolve()
+        assert path.is_file() and source.is_file()
+    else:
+        path = tmp_path / "browser-untrained-fixture.pt"
+        create(path)
     monkeypatch.setattr(settings, "model_path", path)
     monkeypatch.setattr(runtime, "_detector", None)
     page = browser_page
@@ -268,10 +279,19 @@ def test_browser_actual_yolov5_image_flow(browser_page, monkeypatch, tmp_path):
     expect(page.locator("#modelName")).to_have_text(
         "Custom YOLOv5 checkpoint loaded", timeout=30000
     )
-    upload_image(page)
+    if pilot_checkpoint:
+        page.locator("#fileInput").set_input_files(str(source))
+        page.locator("#runBtn").click()
+        page.wait_for_function("document.querySelector('#resultImg').naturalWidth > 0", timeout=30000)
+        with Image.open(source) as decoded:
+            width = decoded.width
+        filename = source.name
+    else:
+        upload_image(page)
+        width, filename = 100, "traffic.jpg"
     expect(page.locator("#resultImg")).to_be_visible()
-    expect(page.locator("#sFile")).to_have_text("traffic.jpg")
-    assert page.locator("#resultImg").evaluate("img => img.naturalWidth") == 100
+    expect(page.locator("#sFile")).to_have_text(filename)
+    assert page.locator("#resultImg").evaluate("img => img.naturalWidth") == width
 
 
 def test_browser_video_upload_and_refresh(browser_page, detector, tmp_path):

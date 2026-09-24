@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import sys
 
+from training.public_dataset import annotation
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -64,7 +66,15 @@ def main():
     for filename in ("provenance.json", "ATTRIBUTION.md"):
         shutil.copy2(data.parent / filename, result / filename)
     print(json.dumps(report, indent=2))
+    annotation("notice", "Experimental model evaluation", json.dumps({
+        "status": report["status"], "checkpoint_sha256": digest,
+        "evaluation": evaluations, "limitations": report["limitations"],
+    }))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        annotation("error", "Public training pilot failed", f"{type(exc).__name__}: {exc}")
+        raise

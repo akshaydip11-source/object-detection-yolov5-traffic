@@ -45,6 +45,12 @@ ATTRIBUTION = {
 }
 
 
+def annotation(level, title, message):
+    """Expose bounded audit evidence through native GitHub annotations (no write token)."""
+    text = str(message)[:8000].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{level} title={title}::{text}", flush=True)
+
+
 def source_group(name):
     """Roboflow variants share the filename before `.rf.`."""
     return PurePosixPath(name).name.split(".rf.")[0]
@@ -138,7 +144,10 @@ def prepare(archive, output, limits=None):
                 label = str(PurePosixPath(name.replace("/images/", "/labels/")).with_suffix(".txt"))
                 if label not in available:
                     raise DatasetError("Missing source label: " + label)
-                text, counts = remap_labels(z.read(label).decode("utf-8"))
+                try:
+                    text, counts = remap_labels(z.read(label).decode("utf-8"))
+                except DatasetError as exc:
+                    raise DatasetError(f"{exc}: {label}") from exc
                 found.append({"image": name, "label": label, "group": group, "text": text, "counts": counts})
             records[split] = select_records(found, limits[split])
         output.mkdir(parents=True)
@@ -201,8 +210,14 @@ def main():
             (args.output / name).write_text(yaml.safe_dump(config))
         report["path"] = str(args.output.resolve())
         (args.output / "provenance.json").write_text(json.dumps(report, indent=2))
-        print(json.dumps({k: v for k, v in report.items() if k != "manifest"}, indent=2))
+        summary = {k: v for k, v in report.items() if k != "manifest"}
+        print(json.dumps(summary, indent=2))
+        annotation("notice", "Public dataset audit", json.dumps(summary))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        annotation("error", "Public dataset audit failed", f"{type(exc).__name__}: {exc}")
+        raise
