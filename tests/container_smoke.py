@@ -1,6 +1,8 @@
 """CI-only container smoke check with a temporary UNTRAINED checkpoint.
 
-Requires a Docker daemon and a built safecity-ci image. Does not certify best.pt.
+Requires a Docker daemon and a built safecity-ci image. Optional explicit
+PILOT_CHECKPOINT/PILOT_IMAGE exercise a supplied artifact; otherwise weights are
+untrained fixtures. Successful integration does not certify model accuracy.
 """
 
 import io
@@ -8,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,11 +30,18 @@ def main():
     with tempfile.TemporaryDirectory(prefix="safecity-container-") as directory:
         root = Path(directory)
         root.chmod(0o755)
-        checkpoint = root / "untrained-test-only.pt"
-        subprocess.run(
-            [sys.executable, "-m", "tests.checkpoint_factory", str(checkpoint)],
-            check=True,
-        )
+        pilot_checkpoint = os.getenv("PILOT_CHECKPOINT")
+        pilot_image = os.getenv("PILOT_IMAGE")
+        if bool(pilot_checkpoint) != bool(pilot_image):
+            raise ValueError("Supply both explicit pilot paths")
+        checkpoint = root / ("pilot-test-only.pt" if pilot_checkpoint else "untrained-test-only.pt")
+        if pilot_checkpoint:
+            shutil.copyfile(Path(pilot_checkpoint).resolve(), checkpoint)
+        else:
+            subprocess.run(
+                [sys.executable, "-m", "tests.checkpoint_factory", str(checkpoint)],
+                check=True,
+            )
         checkpoint.chmod(0o644)
         env = {**os.environ, "SECRET_KEY": secrets.token_urlsafe(48)}
         container = docker(
@@ -53,7 +63,7 @@ def main():
             "-e",
             "DEMO_MODE=false",
             "-e",
-            "MODEL_PATH=/app/models/untrained-test-only.pt",
+            f"MODEL_PATH=/app/models/{checkpoint.name}",
             "--mount",
             f"type=bind,source={root},target=/app/models,readonly",
             "-p",
@@ -109,12 +119,17 @@ with SessionLocal() as db:
                 )
                 login.raise_for_status()
                 headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-                image = io.BytesIO()
-                Image.new("RGB", (120, 80), "black").save(image, format="JPEG")
+                if pilot_image:
+                    source = Path(pilot_image)
+                    image_file = (source.name, source.read_bytes(), "image/png" if source.suffix.lower() == ".png" else "image/jpeg")
+                else:
+                    image = io.BytesIO()
+                    Image.new("RGB", (120, 80), "black").save(image, format="JPEG")
+                    image_file = ("ci.jpg", image.getvalue(), "image/jpeg")
                 result = client.post(
                     "/api/detect/image",
                     headers=headers,
-                    files={"file": ("ci.jpg", image.getvalue(), "image/jpeg")},
+                    files={"file": image_file},
                 )
                 result.raise_for_status()
                 assert client.get(result.json()["result_url"]).status_code == 200
@@ -126,6 +141,8 @@ with SessionLocal() as db:
                     f"Container inference/auth/media smoke passed (health state: {health['Status']})."
                 )
                 print(
+                    "Supplied pilot checkpoint exercised; this is not accuracy certification."
+                    if pilot_checkpoint else
                     "Random weights only: trained-model compatibility and accuracy remain unverified."
                 )
         finally:

@@ -37,7 +37,7 @@ jobs:
           path: .cache/public-data/rasyd.zip
           key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
       - name: Download pinned public export and validate labels, license and splits
-        run: python -m training.public_dataset --output runs/public-pilot-data --quarantine-invalid --download-cache .cache/public-data/rasyd.zip
+        run: python -m training.public_dataset --output runs/public-pilot-data --quarantine-invalid --polygon-boxes --download-cache .cache/public-data/rasyd.zip
       - uses: actions/cache/save@v5
         if: always() && steps.public-data-cache.outputs.cache-hit != 'true'
         with:
@@ -45,6 +45,13 @@ jobs:
           key: rasyd-dab329daaa7213a3307b3677dab82e6024ffe41038870e7d970d7fa07fe9bb9d
       - name: Train experimental YOLOv5n and evaluate held-out validation and test data
         run: python -m training.public_pilot
+      - run: docker build -t safecity-ci .
+      - name: Actual trained checkpoint in the hardened production container
+        run: |
+          PILOT_CHECKPOINT=runs/public-pilot-results/experimental_best.pt \
+          PILOT_IMAGE="$(find runs/public-pilot-data/images/test -type f | sort | head -1)" \
+          python -m tests.container_smoke
+          echo "::notice title=Trained-checkpoint container smoke::Passed supplied trained checkpoint in non-root, read-only production Docker container, including authentication, real image inference and private media. Not accuracy certification."
       - run: python -m playwright install --with-deps chromium
       - name: Actual trained checkpoint through HTTP, API and Chromium
         run: |

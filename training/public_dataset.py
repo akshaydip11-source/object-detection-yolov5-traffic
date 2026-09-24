@@ -40,7 +40,7 @@ ATTRIBUTION = {
     "license_url": "https://creativecommons.org/licenses/by/4.0/",
     "mirror_commit": SOURCE_COMMIT,
     "archive_sha256": SOURCE_SHA256,
-    "changes": "Deterministic subset; one variant per named original; explicitly quarantine invalid groups when requested; drop non-target classes; remap IDs to Helmet=0, NoHelmet=1, LicensePlate=2. No new annotations.",
+    "changes": "Deterministic subset; explicit polygon-to-axis-aligned-box conversion when requested; one variant per named original; explicitly quarantine invalid groups when requested; drop non-target classes; remap IDs to Helmet=0, NoHelmet=1, LicensePlate=2. No new annotations.",
     "limitations": "Publisher-declared license, not a warranty of underlying image rights. Source-video identities and near-duplicate scenes are not established; group isolation by original filename is not video-level isolation. Pilot only, not enforcement approval.",
 }
 
@@ -56,17 +56,34 @@ def source_group(name):
     return PurePosixPath(name).name.split(".rf.")[0]
 
 
-def remap_labels(text):
+def remap_labels(text, polygon_boxes=False, statistics=None):
     rows, counts = [], Counter()
     for line in text.splitlines():
         if not line.strip():
             continue
         fields = line.split()
         try:
-            if len(fields) != 5:
+            if not fields:
                 raise ValueError()
             cid = int(fields[0])
-            x, y, w, h = map(float, fields[1:])
+            converted = False
+            if len(fields) == 5:
+                x, y, w, h = map(float, fields[1:])
+                box_fields = fields[1:]
+            elif polygon_boxes and len(fields) >= 7 and len(fields) % 2 == 1:
+                points = list(map(float, fields[1:]))
+                if not all(math.isfinite(v) and 0 <= v <= 1 for v in points):
+                    raise ValueError()
+                xs, ys = points[0::2], points[1::2]
+                area = sum(xs[i] * ys[(i + 1) % len(xs)] - xs[(i + 1) % len(xs)] * ys[i] for i in range(len(xs)))
+                if abs(area) < 1e-12:
+                    raise ValueError()
+                left, right, top, bottom = min(xs), max(xs), min(ys), max(ys)
+                x, y, w, h = (left + right) / 2, (top + bottom) / 2, right - left, bottom - top
+                box_fields = [format(v, ".12g") for v in (x, y, w, h)]
+                converted = True
+            else:
+                raise ValueError()
             if cid not in range(len(SOURCE_NAMES)) or not all(math.isfinite(v) for v in (x, y, w, h)):
                 raise ValueError()
             if not (0 < w <= 1 and 0 < h <= 1 and w / 2 - 1e-6 <= x <= 1 - w / 2 + 1e-6 and h / 2 - 1e-6 <= y <= 1 - h / 2 + 1e-6):
@@ -75,7 +92,9 @@ def remap_labels(text):
             raise DatasetError("Invalid source annotation; no automatic box repair performed: " + json.dumps(fields)) from exc
         if cid in CLASS_MAP:
             target = CLASS_MAP[cid]
-            rows.append(" ".join([str(target), *fields[1:]]))
+            rows.append(" ".join([str(target), *box_fields]))
+            if converted and statistics is not None:
+                statistics[target] += 1
             counts[target] += 1
     return "\n".join(rows) + ("\n" if rows else ""), counts
 
@@ -102,7 +121,7 @@ def select_records(records, limit):
     return selected
 
 
-def prepare(archive, output, limits=None, quarantine_invalid=False):
+def prepare(archive, output, limits=None, quarantine_invalid=False, polygon_boxes=False):
     limits = limits or {"train": 320, "val": 64, "test": 64}
     if output.exists():
         raise DatasetError("Output already exists; use a new directory (never overwrite data)")
@@ -144,14 +163,15 @@ def prepare(archive, output, limits=None, quarantine_invalid=False):
                 label = str(PurePosixPath(name.replace("/images/", "/labels/")).with_suffix(".txt"))
                 if label not in available:
                     raise DatasetError("Missing source label: " + label)
+                polygon_counts = Counter()
                 try:
-                    text, counts = remap_labels(z.read(label).decode("utf-8"))
+                    text, counts = remap_labels(z.read(label).decode("utf-8"), polygon_boxes=polygon_boxes, statistics=polygon_counts)
                 except DatasetError as exc:
                     if not quarantine_invalid:
                         raise DatasetError(f"{exc}: {label}") from exc
                     quarantined.setdefault(group, []).append({"source_label": label, "reason": str(exc)})
                     continue
-                found.append({"image": name, "label": label, "group": group, "text": text, "counts": counts})
+                found.append({"image": name, "label": label, "group": group, "text": text, "counts": counts, "polygons": polygon_counts})
             records[split] = found
         for group, splits in groups.items():
             if len(splits) > 1:
@@ -201,6 +221,11 @@ def prepare(archive, output, limits=None, quarantine_invalid=False):
         data_file.write_text(yaml.safe_dump(data))
         report = validate_dataset(data_file)
         report["quarantined_source_groups"] = [{"source_group": group, "reasons": reasons} for group, reasons in sorted(quarantined.items())]
+        report["polygon_boxes_enabled"] = polygon_boxes
+        report["selected_polygon_conversions"] = {
+            split: {NAMES[cid]: sum(row["polygons"][cid] for row in rows) for cid in range(3)}
+            for split, rows in records.items()
+        }
         report["attribution"] = ATTRIBUTION
         report["manifest"] = manifest
         report["source_groups_by_split"] = dict(Counter(split for splits in groups.values() for split in splits))
@@ -214,6 +239,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--archive", type=Path, help="Use an already downloaded, checksum-verified export")
     parser.add_argument("--download-cache", type=Path, help="Cache only the checksum-verified public ZIP for repeated CI audits")
+    parser.add_argument("--polygon-boxes", action="store_true", help="Explicitly derive axis-aligned boxes from genuine normalized polygon annotations; preserve class semantics")
     parser.add_argument("--quarantine-invalid", action="store_true", help="Explicitly exclude invalid or leaking original-image groups, up to 5%; record every exclusion, never repair boxes")
     args = parser.parse_args()
     if args.output.exists():
@@ -239,7 +265,7 @@ def main():
             partial.replace(archive)
         # Build transactionally: an invalid source never leaves a usable partial dataset.
         staging = Path(temp) / "prepared"
-        report = prepare(archive, staging, quarantine_invalid=args.quarantine_invalid)
+        report = prepare(archive, staging, quarantine_invalid=args.quarantine_invalid, polygon_boxes=args.polygon_boxes)
         if args.output.exists():
             raise DatasetError("Output already exists; choose a new directory")
         shutil.copytree(staging, args.output)

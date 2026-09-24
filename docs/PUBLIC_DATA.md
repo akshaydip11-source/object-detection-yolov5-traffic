@@ -30,6 +30,10 @@ included/exported model files, if any, are not used. The pilot starts from the
 1. Download the pinned export over HTTPS; verify exact length and SHA256.
 2. Require exact reviewed class order and CC BY 4.0 metadata inside the ZIP.
 3. Remap only genuine annotations: Helmet 0→0, No_Helmet 4→1, License_plate 1→2.
+   The export contains some polygon rows as well as box rows. Explicitly enabled
+   `--polygon-boxes` converts valid normalized polygons into their axis-aligned
+   enclosing boxes and records per-class conversion counts. Reject nonfinite,
+   out-of-bounds or zero-area polygons rather than silently clipping them.
    Drop the other classes. **Never map Person/Motorbike/Rider to NoHelmet.**
 4. Keep published train/validation/test assignments. Reject repeated original
    filenames across splits; retain one augmentation per named source image.
@@ -37,9 +41,12 @@ included/exported model files, if any, are not used. The pilot starts from the
    preferentially including up to eight images of each class in each split.
    This deliberately changes prevalence: reported metrics describe this pilot subset,
    not an unbiased estimate of source/population prevalence.
-6. Strict mode rejects bad source boxes. The real archive audit found an invalid
-   annotation in `car100_jpg.rf.4b4550a961f5facc9f19058c674cf2f3.txt`.
-   A second audit found `IMG_8615_PNG` in multiple published splits.
+6. The initial detection-only parser rejected the multi-vertex annotation in
+   `car100_jpg.rf.4b4550a961f5facc9f19058c674cf2f3.txt`. Detailed diagnostics clarified
+   that this was a polygon-format mismatch, not necessarily a malformed annotation;
+   the conversion above addresses it. A separate audit found `IMG_8615_PNG` in
+   multiple published splits. The previous no-polygon-conversion attempt excluded
+   220/2,782 groups and was correctly blocked by the unchanged 5% exclusion cap.
    The pilot explicitly enables `--quarantine-invalid`: exclude the entire named
    original-image group from **all splits**, record the label/reason, and abort if
    more than 5% of all groups would be excluded. The same whole-group exclusion
@@ -56,7 +63,9 @@ further review. No public-source benchmark score is presented as our model's sco
 `python -m training.public_pilot` runs 20 CPU epochs at 320px, validates the selected
 best checkpoint, evaluates validation/test at the API's 640px input size, and records aggregate metrics,
 per-class mAP50–95 and annotated validation batches. It does **not** install the
-checkpoint in `models/`, change Render, or approve operational use. An image-size
+checkpoint in `models/`, change Render, or approve operational use. A successful
+training run is followed by actual-checkpoint Docker and real-HTTP Chromium image
+smoke checks; those integration tests do not substitute for accuracy review. An image-size
 option is now available in the general training CLI; its normal default remains 640px.
 
 The **Public dataset pilot** GitHub workflow runs only on this session branch when
@@ -68,7 +77,7 @@ are verified on every import. Native GitHub annotations expose bounded audit err
 and evaluation summaries without extra write permissions. Local direct downloads to the public media host fail TLS in this sandbox, so the
 first real archive audit/training is performed by that workflow. **At this document's
 initial publication, the first strict import failed on a source annotation. The
-explicit quarantine retry is pending; no trained-model accuracy is claimed.**
+explicit polygon-conversion/quarantine retry is pending; no trained-model accuracy is claimed.**
 
 ## Other candidates checked
 

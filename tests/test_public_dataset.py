@@ -150,3 +150,28 @@ def test_quarantine_removes_differently_named_byte_duplicates(tmp_path, monkeypa
     report = public.prepare(archive, tmp_path / 'prepared', quarantine_invalid=True)
     assert {item['source_group'] for item in report['quarantined_source_groups']} == {'extra0', 'renamed'}
     assert all(item['source_group'] not in {'extra0', 'renamed'} for item in report['manifest'])
+
+
+def test_explicit_polygon_to_box_preserves_class_and_bounds():
+    # A genuine license-plate polygon, not a guessed class or repaired bad box.
+    polygon = '1 0.1 0.2 0.7 0.2 0.7 0.6 0.1 0.6 0.1 0.2'
+    with pytest.raises(DatasetError):
+        public.remap_labels(polygon)
+    from collections import Counter
+    stats = Counter()
+    text, counts = public.remap_labels(polygon, polygon_boxes=True, statistics=stats)
+    fields = text.split()
+    assert fields[0] == '2'
+    assert list(map(float, fields[1:])) == pytest.approx([0.4, 0.4, 0.6, 0.4])
+    assert counts == {2: 1} and stats == {2: 1}
+
+
+@pytest.mark.parametrize('polygon', [
+    '1 0 0 0.5 0.5 1 1',  # degenerate polygon
+    '1 0 0 1.1 0 1 1',  # out of bounds: never clip silently
+    '1 0 0 1 0 nan 1',
+    '1 0 0 1 0 1',
+])
+def test_bad_polygons_still_rejected(polygon):
+    with pytest.raises(DatasetError):
+        public.remap_labels(polygon, polygon_boxes=True)
